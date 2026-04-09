@@ -3,10 +3,23 @@ import type { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '../DataTable'
 import type { Filters } from '@/lib/filters'
 import { fetchTasksWithoutEstimates, type TaskWithoutEstimate } from '@/lib/queries'
-import { formatDate } from '@/lib/format'
+import { formatDate, acTaskUrl } from '@/lib/format'
 
 const columns: ColumnDef<TaskWithoutEstimate>[] = [
-  { accessorKey: 'name', header: 'Task' },
+  {
+    accessorKey: 'name',
+    header: 'Task',
+    cell: ({ row }) => (
+      <a
+        href={acTaskUrl(row.original.project_id, row.original.id)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-blue-600 hover:text-blue-800 hover:underline"
+      >
+        {row.original.name}
+      </a>
+    ),
+  },
   { accessorKey: 'project_name', header: 'Project' },
   {
     accessorKey: 'assignee_name',

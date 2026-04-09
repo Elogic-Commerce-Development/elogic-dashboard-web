@@ -3,10 +3,23 @@ import type { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '../DataTable'
 import type { Filters } from '@/lib/filters'
 import { fetchActualVsEstimate, type TaskActualVsEstimate } from '@/lib/queries'
-import { formatHours, formatRatio, formatDate } from '@/lib/format'
+import { formatHours, formatRatio, formatDate, acTaskUrl } from '@/lib/format'
 
 const columns: ColumnDef<TaskActualVsEstimate>[] = [
-  { accessorKey: 'task_name', header: 'Task' },
+  {
+    accessorKey: 'task_name',
+    header: 'Task',
+    cell: ({ row }) => (
+      <a
+        href={acTaskUrl(row.original.project_id, row.original.task_id)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-blue-600 hover:text-blue-800 hover:underline"
+      >
+        {row.original.task_name}
+      </a>
+    ),
+  },
   { accessorKey: 'project_name', header: 'Project' },
   {
     accessorKey: 'assignee_name',
