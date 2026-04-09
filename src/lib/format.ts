@@ -16,6 +16,12 @@ export function formatDate(value: string | null | undefined): string {
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit' })
 }
 
+const AC_ORG_ID = 162650
+
+export function acTaskUrl(projectId: number, taskId: number): string {
+  return `https://next-app.activecollab.com/${AC_ORG_ID}/projects/${projectId}/tasks/${taskId}`
+}
+
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return '—'
   const d = new Date(value)
