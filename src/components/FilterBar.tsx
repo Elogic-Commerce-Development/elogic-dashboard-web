@@ -5,9 +5,10 @@ import type { Filters } from '@/lib/filters'
 type Props = {
   value: Filters
   onChange: (next: Filters) => void
+  hideDateRange?: boolean
 }
 
-export function FilterBar({ value, onChange }: Props) {
+export function FilterBar({ value, onChange, hideDateRange }: Props) {
   const [projects, setProjects] = useState<ProjectListItem[]>([])
   const [users, setUsers] = useState<UserListItem[]>([])
 
@@ -36,25 +37,29 @@ export function FilterBar({ value, onChange }: Props) {
 
   return (
     <div className="flex flex-wrap items-end gap-3 rounded-lg border border-neutral-200 bg-white px-4 py-3 shadow-sm">
-      <div>
-        <label className="mb-1 block text-xs font-medium text-neutral-600">From</label>
-        <input
-          type="date"
-          value={value.from ?? ''}
-          onChange={(e) => onChange({ ...value, from: e.target.value || undefined })}
-          className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
-        />
-      </div>
+      {!hideDateRange && (
+        <>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">From</label>
+            <input
+              type="date"
+              value={value.from ?? ''}
+              onChange={(e) => onChange({ ...value, from: e.target.value || undefined })}
+              className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+            />
+          </div>
 
-      <div>
-        <label className="mb-1 block text-xs font-medium text-neutral-600">To</label>
-        <input
-          type="date"
-          value={value.to ?? ''}
-          onChange={(e) => onChange({ ...value, to: e.target.value || undefined })}
-          className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
-        />
-      </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-neutral-600">To</label>
+            <input
+              type="date"
+              value={value.to ?? ''}
+              onChange={(e) => onChange({ ...value, to: e.target.value || undefined })}
+              className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+            />
+          </div>
+        </>
+      )}
 
       <div className="min-w-[220px]">
         <label className="mb-1 block text-xs font-medium text-neutral-600">

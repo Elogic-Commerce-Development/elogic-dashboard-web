@@ -65,7 +65,7 @@ export function AppLayout() {
 
         <main className="mx-auto max-w-7xl space-y-5 px-6 py-6">
           <TrackingSinceBanner />
-          <FilterBar value={filters} onChange={setFilters} />
+          <FilterBar value={filters} onChange={setFilters} hideDateRange={pathname === '/'} />
           <Outlet />
         </main>
       </div>

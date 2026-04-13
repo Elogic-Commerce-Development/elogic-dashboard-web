@@ -171,6 +171,20 @@ export async function fetchTasksOverrun(filters: Filters): Promise<TaskActualVsE
   return (data ?? []) as TaskActualVsEstimate[]
 }
 
+export async function fetchAllTasksFiltered(projectIds: number[], userIds: number[]): Promise<TaskActualVsEstimate[]> {
+  let q = supabase
+    .from('v_task_actual_vs_estimate')
+    .select('*')
+    .order('created_on', { ascending: false })
+
+  if (projectIds.length > 0) q = q.in('project_id', projectIds)
+  if (userIds.length > 0) q = q.in('assignee_id', userIds)
+
+  const { data, error } = await q
+  if (error) throw error
+  return (data ?? []) as TaskActualVsEstimate[]
+}
+
 export async function fetchActualVsEstimate(filters: Filters): Promise<TaskActualVsEstimate[]> {
   let q = supabase
     .from('v_task_actual_vs_estimate')
