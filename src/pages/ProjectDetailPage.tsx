@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { Link, useParams } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/components/DataTable'
 import { supabase } from '@/lib/supabase'
-import type { TaskActualVsEstimate } from '@/lib/queries'
-import { formatHours, formatRatio, acProjectUrl, acTaskUrl } from '@/lib/format'
+import type { TaskActualVsEstimate, RecentOverrun } from '@/lib/queries'
+import { formatHours, acProjectUrl, acTaskUrl } from '@/lib/format'
 
 type ProjectInfo = { id: number; name: string; is_completed: boolean }
 
@@ -51,10 +51,24 @@ const taskColumns: ColumnDef<TaskActualVsEstimate>[] = [
   {
     accessorKey: 'ratio',
     header: 'Ratio',
-    cell: ({ getValue }) => {
-      const r = getValue() as number | null
-      const cls = r != null && r >= 2 ? 'text-red-600 font-medium' : r != null && r >= 1.5 ? 'text-amber-600' : ''
-      return <span className={cls}>{formatRatio(r)}</span>
+    cell: ({ row }) => {
+      const r = row.original.ratio != null ? Number(row.original.ratio) : null
+      if (r == null) return '—'
+      const pct = Math.round(r * 100)
+      const cls = r >= 2 ? 'text-red-600 font-semibold' : r >= 1.5 ? 'text-amber-600 font-medium' : ''
+      return <span className={cls}>{pct}%</span>
+    },
+  },
+  {
+    id: 'overrun',
+    header: 'Overrun',
+    cell: ({ row }) => {
+      const est = row.original.estimate_hours != null ? Number(row.original.estimate_hours) : null
+      const act = Number(row.original.actual_hours)
+      if (est == null || est === 0) return '—'
+      const diff = act - est
+      if (diff <= 0) return <span className="text-emerald-600">—</span>
+      return <span className="font-medium text-red-600">+{formatHours(diff)}</span>
     },
   },
   {
@@ -64,11 +78,55 @@ const taskColumns: ColumnDef<TaskActualVsEstimate>[] = [
   },
 ]
 
+function getTaskRowClassName(task: TaskActualVsEstimate): string {
+  const isOpen = !task.is_completed
+  const hasEstimate = task.estimate_hours != null
+  const actualHours = Number(task.actual_hours)
+  const estimateHours = hasEstimate ? Number(task.estimate_hours) : 0
+
+  // Open + overrun → strong red highlight
+  if (isOpen && hasEstimate && estimateHours > 0 && actualHours > estimateHours) {
+    return 'bg-red-50 border-t border-red-100 hover:bg-red-100'
+  }
+  // Open + no estimate + has tracked time → amber highlight
+  if (isOpen && !hasEstimate && actualHours > 0) {
+    return 'bg-amber-50 border-t border-amber-100 hover:bg-amber-100'
+  }
+  return 'border-t border-neutral-100 hover:bg-neutral-50'
+}
+
+function KpiCard({
+  label,
+  value,
+  sub,
+  color,
+}: {
+  label: string
+  value: string
+  sub?: string
+  color: 'red' | 'amber' | 'emerald' | 'neutral'
+}) {
+  const colorMap = {
+    red: 'border-red-200 bg-red-50 text-red-900',
+    amber: 'border-amber-200 bg-amber-50 text-amber-900',
+    emerald: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+    neutral: 'border-neutral-200 bg-white text-neutral-900',
+  }
+  return (
+    <div className={`rounded-lg border px-4 py-3 ${colorMap[color]}`}>
+      <div className="text-2xl font-bold">{value}</div>
+      <div className="mt-0.5 text-xs opacity-70">{label}</div>
+      {sub && <div className="mt-0.5 text-xs font-medium opacity-60">{sub}</div>}
+    </div>
+  )
+}
+
 export function ProjectDetailPage() {
   const { projectId } = useParams({ from: '/projects/$projectId' })
   const pid = Number(projectId)
   const [project, setProject] = useState<ProjectInfo | null>(null)
   const [tasks, setTasks] = useState<TaskActualVsEstimate[]>([])
+  const [recentOverruns, setRecentOverruns] = useState<RecentOverrun[]>([])
   const [contributors, setContributors] = useState<{ contributor_id: number; contributor_name: string; hours: number; tasks: number }[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -94,11 +152,17 @@ export function ProjectDetailPage() {
       .select('contributor_id, contributor_name, contributor_hours, task_id')
       .eq('project_id', pid)
 
-    Promise.all([loadProject, loadTasks, loadContributors])
-      .then(([pRes, tRes, cRes]) => {
+    const loadRecentOverruns = supabase
+      .from('v_recent_overrun_activity')
+      .select('*')
+      .eq('project_id', pid)
+
+    Promise.all([loadProject, loadTasks, loadContributors, loadRecentOverruns])
+      .then(([pRes, tRes, cRes, roRes]) => {
         if (cancelled) return
         if (pRes.data) setProject(pRes.data as ProjectInfo)
         setTasks((tRes.data ?? []) as TaskActualVsEstimate[])
+        setRecentOverruns((roRes.data ?? []) as RecentOverrun[])
 
         // Aggregate contributor rows
         const map = new Map<number, { contributor_id: number; contributor_name: string; hours: number; tasks: Set<number> }>()
@@ -123,6 +187,38 @@ export function ProjectDetailPage() {
       })
     return () => { cancelled = true }
   }, [pid])
+
+  const metrics = useMemo(() => {
+    const totalWithoutEstimate = tasks.filter(t => t.estimate_hours == null).length
+    const openWithoutEstimate = tasks.filter(t => t.estimate_hours == null && !t.is_completed).length
+    const openWithoutEstimateWithTime = tasks.filter(t => t.estimate_hours == null && !t.is_completed && Number(t.actual_hours) > 0).length
+
+    const overrunTasks = tasks.filter(t => t.estimate_hours != null && Number(t.estimate_hours) > 0 && Number(t.actual_hours) > Number(t.estimate_hours))
+    const totalOverrunHours = overrunTasks.reduce((sum, t) => sum + (Number(t.actual_hours) - Number(t.estimate_hours!)), 0)
+
+    const estimatedTasks = tasks.filter(t => t.estimate_hours != null && Number(t.estimate_hours) > 0)
+    const totalEstimateHours = estimatedTasks.reduce((sum, t) => sum + Number(t.estimate_hours!), 0)
+    const totalOverrunPct = totalEstimateHours > 0 ? Math.round((totalOverrunHours / totalEstimateHours) * 100) : 0
+
+    const openOverrunCount = overrunTasks.filter(t => !t.is_completed).length
+
+    return {
+      totalWithoutEstimate,
+      openWithoutEstimate,
+      openWithoutEstimateWithTime,
+      totalOverrunHours,
+      totalOverrunPct,
+      overrunTaskCount: overrunTasks.length,
+      openOverrunCount,
+    }
+  }, [tasks])
+
+  const lastMonthMetrics = useMemo(() => {
+    const overrunHours = recentOverruns.reduce((sum, r) => sum + (Number(r.actual_hours) - Number(r.estimate_hours)), 0)
+    const estimateBase = recentOverruns.reduce((sum, r) => sum + Number(r.estimate_hours), 0)
+    const pct = estimateBase > 0 ? Math.round((overrunHours / estimateBase) * 100) : 0
+    return { hours: overrunHours, pct, taskCount: recentOverruns.length }
+  }, [recentOverruns])
 
   if (loading) {
     return <div className="py-12 text-center text-sm text-neutral-400">Loading project...</div>
@@ -150,9 +246,72 @@ export function ProjectDetailPage() {
         )}
       </div>
 
+      {/* KPI cards */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <KpiCard
+          label="Tasks w/o estimates"
+          value={String(metrics.totalWithoutEstimate)}
+          sub={`${metrics.openWithoutEstimate} open`}
+          color={metrics.totalWithoutEstimate > 0 ? 'amber' : 'emerald'}
+        />
+        <KpiCard
+          label="Open w/o estimate, active"
+          value={String(metrics.openWithoutEstimateWithTime)}
+          sub="open + tracked time"
+          color={metrics.openWithoutEstimateWithTime > 0 ? 'red' : 'emerald'}
+        />
+        <KpiCard
+          label="Total overrun"
+          value={formatHours(metrics.totalOverrunHours)}
+          sub={`${metrics.totalOverrunPct}% of estimates`}
+          color={metrics.totalOverrunHours > 0 ? 'red' : 'emerald'}
+        />
+        <KpiCard
+          label="Last 30d overrun"
+          value={formatHours(lastMonthMetrics.hours)}
+          sub={`${lastMonthMetrics.pct}% of estimates`}
+          color={lastMonthMetrics.hours > 0 ? 'red' : 'emerald'}
+        />
+        <KpiCard
+          label="Overrun tasks"
+          value={`${metrics.overrunTaskCount}`}
+          sub={`${metrics.openOverrunCount} open`}
+          color={metrics.openOverrunCount > 0 ? 'red' : metrics.overrunTaskCount > 0 ? 'amber' : 'emerald'}
+        />
+        <KpiCard
+          label="Total tasks"
+          value={String(tasks.length)}
+          color="neutral"
+        />
+      </div>
+
+      {/* Legend for row highlighting */}
+      {(metrics.openOverrunCount > 0 || metrics.openWithoutEstimateWithTime > 0) && (
+        <div className="flex flex-wrap gap-4 text-xs text-neutral-500">
+          {metrics.openOverrunCount > 0 && (
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-3 w-3 rounded border border-red-200 bg-red-50" />
+              Open + overrun
+            </span>
+          )}
+          {metrics.openWithoutEstimateWithTime > 0 && (
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-3 w-3 rounded border border-amber-200 bg-amber-50" />
+              Open + no estimate + tracked time
+            </span>
+          )}
+        </div>
+      )}
+
       <section>
         <h3 className="mb-2 text-sm font-semibold text-neutral-900">Tasks ({tasks.length})</h3>
-        <DataTable data={tasks} columns={taskColumns} loading={false} emptyText="No tasks in this project." />
+        <DataTable
+          data={tasks}
+          columns={taskColumns}
+          loading={false}
+          emptyText="No tasks in this project."
+          rowClassName={getTaskRowClassName}
+        />
       </section>
 
       {contributors.length > 0 && (

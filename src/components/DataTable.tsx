@@ -13,9 +13,10 @@ type Props<T> = {
   columns: ColumnDef<T>[]
   emptyText?: string
   loading?: boolean
+  rowClassName?: (row: T) => string
 }
 
-export function DataTable<T>({ data, columns, emptyText = 'No rows.', loading = false }: Props<T>) {
+export function DataTable<T>({ data, columns, emptyText = 'No rows.', loading = false, rowClassName }: Props<T>) {
   const [sorting, setSorting] = useState<SortingState>([])
   const table = useReactTable({
     data,
@@ -64,7 +65,7 @@ export function DataTable<T>({ data, columns, emptyText = 'No rows.', loading = 
               </tr>
             ) : (
               table.getRowModel().rows.map((row) => (
-                <tr key={row.id} className="border-t border-neutral-100 hover:bg-neutral-50">
+                <tr key={row.id} className={rowClassName ? rowClassName(row.original) : 'border-t border-neutral-100 hover:bg-neutral-50'}>
                   {row.getVisibleCells().map((cell) => (
                     <td key={cell.id} className="px-4 py-2 align-top">
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
