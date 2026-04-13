@@ -5,13 +5,16 @@ import {
   fetchRecentOverruns,
   fetchRecentUnestimated,
   fetchMonthlyTrend,
+  fetchAllTasksFiltered,
   type GlobalKpis,
   type RecentOverrun,
   type RecentUnestimated,
   type MonthlyTrend,
+  type TaskActualVsEstimate,
 } from '@/lib/queries'
 import { formatHours, formatRatio, acTaskUrl } from '@/lib/format'
 import { TrendCharts } from '@/components/TrendCharts'
+import { useFilters } from '@/lib/FilterContext'
 
 function KpiCard({
   label,
@@ -36,7 +39,74 @@ function KpiCard({
   )
 }
 
+function computeKpisFromTasks(tasks: TaskActualVsEstimate[]): GlobalKpis {
+  const unestimatedWithTime = tasks.filter(t => t.estimate_hours == null && Number(t.actual_hours) > 0)
+  const overrunTasks = tasks.filter(t =>
+    t.estimate_hours != null && Number(t.estimate_hours) > 0 && Number(t.actual_hours) > Number(t.estimate_hours)
+  )
+  return {
+    unestimated_tasks_with_time: unestimatedWithTime.length,
+    unestimated_hours: unestimatedWithTime.reduce((s, t) => s + Number(t.actual_hours), 0),
+    overrun_tasks: overrunTasks.length,
+    overrun_hours: overrunTasks.reduce((s, t) => s + (Number(t.actual_hours) - Number(t.estimate_hours!)), 0),
+    estimate_adoption_rate: tasks.length > 0
+      ? tasks.filter(t => t.estimate_hours != null).length / tasks.length
+      : null,
+    total_tasks: tasks.length,
+    total_hours: tasks.reduce((s, t) => s + Number(t.actual_hours), 0),
+  }
+}
+
+function computeShortlists(tasks: TaskActualVsEstimate[]) {
+  const cutoff = new Date()
+  cutoff.setDate(cutoff.getDate() - 30)
+  const cutoffStr = cutoff.toISOString().split('T')[0]
+
+  const overruns: RecentOverrun[] = tasks
+    .filter(t =>
+      t.estimate_hours != null && Number(t.estimate_hours) > 0 &&
+      Number(t.actual_hours) > Number(t.estimate_hours) &&
+      t.last_record_date && t.last_record_date >= cutoffStr
+    )
+    .sort((a, b) => Number(b.actual_hours) - Number(a.actual_hours))
+    .slice(0, 5)
+    .map(t => ({
+      task_id: t.task_id,
+      task_name: t.task_name,
+      project_id: t.project_id,
+      project_name: t.project_name,
+      estimate_hours: Number(t.estimate_hours!),
+      actual_hours: Number(t.actual_hours),
+      ratio: Number(t.ratio!),
+      recent_hours: Number(t.actual_hours),
+      last_record_date: t.last_record_date!,
+    }))
+
+  const unestimated: RecentUnestimated[] = tasks
+    .filter(t =>
+      t.estimate_hours == null && !t.is_completed &&
+      Number(t.actual_hours) > 0 &&
+      t.last_record_date && t.last_record_date >= cutoffStr
+    )
+    .sort((a, b) => Number(b.actual_hours) - Number(a.actual_hours))
+    .slice(0, 5)
+    .map(t => ({
+      task_id: t.task_id,
+      task_name: t.task_name,
+      project_id: t.project_id,
+      project_name: t.project_name,
+      recent_hours: Number(t.actual_hours),
+      total_hours: Number(t.actual_hours),
+      last_record_date: t.last_record_date!,
+    }))
+
+  return { overruns, unestimated }
+}
+
 export function DashboardPage() {
+  const { filters } = useFilters()
+  const hasFilters = filters.projectIds.length > 0 || filters.userIds.length > 0
+
   const [kpis, setKpis] = useState<GlobalKpis | null>(null)
   const [topOverruns, setTopOverruns] = useState<RecentOverrun[]>([])
   const [topUnestimated, setTopUnestimated] = useState<RecentUnestimated[]>([])
@@ -46,27 +116,44 @@ export function DashboardPage() {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    Promise.all([
-      fetchGlobalKpis(),
-      fetchRecentOverruns(5),
-      fetchRecentUnestimated(5),
-      fetchMonthlyTrend(),
-    ])
-      .then(([k, overruns, unest, t]) => {
-        if (cancelled) return
-        setKpis(k)
-        setTopOverruns(overruns)
-        setTopUnestimated(unest)
-        setTrend(t)
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
+
+    if (hasFilters) {
+      // Filtered mode: fetch all tasks with filters, compute everything client-side
+      Promise.all([
+        fetchAllTasksFiltered(filters.projectIds, filters.userIds),
+        fetchMonthlyTrend(),
+      ])
+        .then(([tasks, t]) => {
+          if (cancelled) return
+          setKpis(computeKpisFromTasks(tasks))
+          const lists = computeShortlists(tasks)
+          setTopOverruns(lists.overruns)
+          setTopUnestimated(lists.unestimated)
+          setTrend(t)
+        })
+        .catch(() => {})
+        .finally(() => { if (!cancelled) setLoading(false) })
+    } else {
+      // Unfiltered mode: use pre-aggregated views (fast)
+      Promise.all([
+        fetchGlobalKpis(),
+        fetchRecentOverruns(5),
+        fetchRecentUnestimated(5),
+        fetchMonthlyTrend(),
+      ])
+        .then(([k, overruns, unest, t]) => {
+          if (cancelled) return
+          setKpis(k)
+          setTopOverruns(overruns)
+          setTopUnestimated(unest)
+          setTrend(t)
+        })
+        .catch(() => {})
+        .finally(() => { if (!cancelled) setLoading(false) })
     }
-  }, [])
+
+    return () => { cancelled = true }
+  }, [hasFilters, filters.projectIds, filters.userIds])
 
   if (loading) {
     return <div className="py-12 text-center text-sm text-neutral-400">Loading dashboard...</div>
@@ -157,7 +244,7 @@ export function DashboardPage() {
                   {formatRatio(Number(row.ratio))}
                 </span>
                 <div className="text-xs text-neutral-400">
-                  {formatHours(Number(row.recent_hours))} recent / {formatHours(Number(row.actual_hours))} total
+                  {formatHours(Number(row.actual_hours))} total
                 </div>
               </div>
             </div>
@@ -200,11 +287,8 @@ export function DashboardPage() {
               </div>
               <div className="shrink-0 text-right">
                 <span className="text-sm font-semibold text-amber-600">
-                  {formatHours(Number(row.recent_hours))}
+                  {formatHours(Number(row.total_hours))}
                 </span>
-                <div className="text-xs text-neutral-400">
-                  {formatHours(Number(row.total_hours))} total
-                </div>
               </div>
             </div>
           )}
