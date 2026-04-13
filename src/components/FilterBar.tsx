@@ -8,6 +8,78 @@ type Props = {
   hideDateRange?: boolean
 }
 
+function SearchableMultiSelect<T extends { id: number }>({
+  label,
+  summaryLabel,
+  items,
+  selectedIds,
+  onChange,
+  displayName,
+  searchPlaceholder,
+}: {
+  label: string
+  summaryLabel: string
+  items: T[]
+  selectedIds: number[]
+  onChange: (ids: number[]) => void
+  displayName: (item: T) => string
+  searchPlaceholder: string
+}) {
+  const [search, setSearch] = useState('')
+  const lowerSearch = search.toLowerCase()
+  const filtered = search
+    ? items.filter((item) => displayName(item).toLowerCase().includes(lowerSearch))
+    : items
+
+  function toggle(id: number) {
+    onChange(
+      selectedIds.includes(id)
+        ? selectedIds.filter((v) => v !== id)
+        : [...selectedIds, id]
+    )
+  }
+
+  return (
+    <div className="min-w-[220px]">
+      <label className="mb-1 block text-xs font-medium text-neutral-600">
+        {label} <span className="font-normal text-neutral-400">({summaryLabel})</span>
+      </label>
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={searchPlaceholder}
+        className="mb-1 w-full rounded-md border border-neutral-300 px-2 py-1 text-sm placeholder:text-neutral-400"
+      />
+      <div className="h-24 w-full overflow-y-auto rounded-md border border-neutral-300">
+        {filtered.length === 0 ? (
+          <div className="px-2 py-2 text-xs text-neutral-400">No matches</div>
+        ) : (
+          filtered.map((item) => {
+            const selected = selectedIds.includes(item.id)
+            return (
+              <label
+                key={item.id}
+                className={`flex cursor-pointer items-center gap-1.5 px-2 py-0.5 text-sm hover:bg-neutral-100 ${
+                  selected ? 'bg-blue-50 font-medium text-blue-900' : 'text-neutral-700'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  onChange={() => toggle(item.id)}
+                  className="accent-blue-600"
+                />
+                <span className="truncate">{displayName(item)}</span>
+              </label>
+            )
+          })
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function FilterBar({ value, onChange, hideDateRange }: Props) {
   const [projects, setProjects] = useState<ProjectListItem[]>([])
   const [users, setUsers] = useState<UserListItem[]>([])
@@ -61,51 +133,25 @@ export function FilterBar({ value, onChange, hideDateRange }: Props) {
         </>
       )}
 
-      <div className="min-w-[220px]">
-        <label className="mb-1 block text-xs font-medium text-neutral-600">
-          Projects <span className="font-normal text-neutral-400">({projectLabel})</span>
-        </label>
-        <select
-          multiple
-          value={value.projectIds.map(String)}
-          onChange={(e) =>
-            onChange({
-              ...value,
-              projectIds: Array.from(e.target.selectedOptions).map((o) => Number(o.value)),
-            })
-          }
-          className="h-24 w-full rounded-md border border-neutral-300 px-2 py-1 text-sm"
-        >
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </div>
+      <SearchableMultiSelect
+        label="Projects"
+        summaryLabel={projectLabel}
+        items={projects}
+        selectedIds={value.projectIds}
+        onChange={(projectIds) => onChange({ ...value, projectIds })}
+        displayName={(p) => p.name}
+        searchPlaceholder="Search projects…"
+      />
 
-      <div className="min-w-[220px]">
-        <label className="mb-1 block text-xs font-medium text-neutral-600">
-          Users <span className="font-normal text-neutral-400">({userLabel})</span>
-        </label>
-        <select
-          multiple
-          value={value.userIds.map(String)}
-          onChange={(e) =>
-            onChange({
-              ...value,
-              userIds: Array.from(e.target.selectedOptions).map((o) => Number(o.value)),
-            })
-          }
-          className="h-24 w-full rounded-md border border-neutral-300 px-2 py-1 text-sm"
-        >
-          {users.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.display_name}
-            </option>
-          ))}
-        </select>
-      </div>
+      <SearchableMultiSelect
+        label="Users"
+        summaryLabel={userLabel}
+        items={users}
+        selectedIds={value.userIds}
+        onChange={(userIds) => onChange({ ...value, userIds })}
+        displayName={(u) => u.display_name}
+        searchPlaceholder="Search users…"
+      />
 
       <button
         type="button"
