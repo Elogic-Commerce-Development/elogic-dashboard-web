@@ -51,6 +51,55 @@ export type SyncStatusRow = {
   time_record_count: number
 }
 
+export type GlobalKpis = {
+  unestimated_tasks_with_time: number
+  unestimated_hours: number
+  overrun_tasks: number
+  overrun_hours: number
+  estimate_adoption_rate: number | null
+  total_tasks: number
+  total_hours: number
+}
+
+export type ContributorStats = {
+  contributor_id: number
+  contributor_name: string
+  tasks_contributed_to: number
+  unestimated_tasks: number
+  overrun_tasks: number
+  total_hours: number
+  hours_on_unestimated: number
+  hours_on_overrun: number
+  estimate_adoption: number | null
+  projects_contributed_to: number
+  mean_ratio: number | null
+  median_ratio: number | null
+}
+
+export type ContributorTaskSummary = {
+  contributor_id: number
+  contributor_name: string
+  task_id: number
+  task_name: string
+  project_id: number
+  project_name: string
+  assignee_id: number | null
+  estimate_hours: number | null
+  contributor_hours: number
+  task_actual_hours: number
+  is_completed: boolean
+  completed_on: string | null
+  created_on: string
+}
+
+export type TaskContributor = {
+  task_id: number
+  contributor_id: number
+  contributor_name: string
+  hours: number
+  share: number | null
+}
+
 export type ProjectListItem = { id: number; name: string }
 export type UserListItem = { id: number; display_name: string }
 
@@ -156,4 +205,61 @@ export async function fetchUsers(): Promise<UserListItem[]> {
     .order('display_name', { ascending: true })
   if (error) throw error
   return (data ?? []) as UserListItem[]
+}
+
+export async function fetchGlobalKpis(): Promise<GlobalKpis | null> {
+  const { data, error } = await supabase.from('v_global_kpis').select('*').maybeSingle()
+  if (error) throw error
+  return (data as GlobalKpis | null) ?? null
+}
+
+export async function fetchContributorStats(): Promise<ContributorStats[]> {
+  const { data, error } = await supabase
+    .from('v_contributor_stats')
+    .select('*')
+    .order('total_hours', { ascending: false })
+  if (error) throw error
+  return (data ?? []) as ContributorStats[]
+}
+
+export async function fetchContributorTaskSummary(contributorId: number): Promise<ContributorTaskSummary[]> {
+  const { data, error } = await supabase
+    .from('v_contributor_task_summary')
+    .select('*')
+    .eq('contributor_id', contributorId)
+    .order('created_on', { ascending: false })
+  if (error) throw error
+  return (data ?? []) as ContributorTaskSummary[]
+}
+
+export async function fetchTaskContributors(taskId: number): Promise<TaskContributor[]> {
+  const { data, error } = await supabase
+    .from('v_task_contributors')
+    .select('*')
+    .eq('task_id', taskId)
+    .order('hours', { ascending: false })
+  if (error) throw error
+  return (data ?? []) as TaskContributor[]
+}
+
+export async function fetchTopUnestimatedWithTime(limit = 5): Promise<TaskActualVsEstimate[]> {
+  const { data, error } = await supabase
+    .from('v_task_actual_vs_estimate')
+    .select('*')
+    .is('estimate_hours', null)
+    .gt('actual_hours', 0)
+    .order('actual_hours', { ascending: false })
+    .limit(limit)
+  if (error) throw error
+  return (data ?? []) as TaskActualVsEstimate[]
+}
+
+export async function fetchTopOverruns(limit = 5): Promise<TaskActualVsEstimate[]> {
+  const { data, error } = await supabase
+    .from('v_tasks_overrun')
+    .select('*')
+    .order('ratio', { ascending: false })
+    .limit(limit)
+  if (error) throw error
+  return (data ?? []) as TaskActualVsEstimate[]
 }

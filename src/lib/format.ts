@@ -22,6 +22,10 @@ export function acTaskUrl(projectId: number, taskId: number): string {
   return `https://next-app.activecollab.com/${AC_ORG_ID}/projects/${projectId}/tasks/${taskId}`
 }
 
+export function acProjectUrl(projectId: number): string {
+  return `https://next-app.activecollab.com/${AC_ORG_ID}/projects/${projectId}`
+}
+
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return '—'
   const d = new Date(value)
