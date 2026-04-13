@@ -338,3 +338,113 @@ export async function fetchMonthlyTrend(): Promise<MonthlyTrend[]> {
   if (error) throw error
   return (data ?? []) as MonthlyTrend[]
 }
+
+type TimeRecordRow = {
+  task_id: number
+  value_hours: number
+  record_date: string
+}
+
+/**
+ * Fetch time records for filtered projects/users, then compute the monthly
+ * trend client-side (mirrors the SQL in v_monthly_trend but scoped).
+ */
+export async function fetchMonthlyTrendFiltered(
+  projectIds: number[],
+  userIds: number[],
+  tasks: TaskActualVsEstimate[],
+): Promise<MonthlyTrend[]> {
+  // Build a lookup of task-level info we already have
+  const taskMap = new Map<number, TaskActualVsEstimate>()
+  for (const t of tasks) taskMap.set(t.task_id, t)
+
+  // Fetch time records scoped to the same project/user filters
+  let q = supabase
+    .from('time_records')
+    .select('task_id, value_hours, record_date')
+    .eq('is_trashed', false)
+    .not('task_id', 'is', null)
+  if (projectIds.length > 0) q = q.in('project_id', projectIds)
+  if (userIds.length > 0) q = q.in('user_id', userIds)
+
+  // Paginate – Supabase default limit is 1000
+  const allRecords: TimeRecordRow[] = []
+  const PAGE = 1000
+  let offset = 0
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { data, error } = await q.range(offset, offset + PAGE - 1)
+    if (error) throw error
+    const rows = (data ?? []) as TimeRecordRow[]
+    allRecords.push(...rows)
+    if (rows.length < PAGE) break
+    offset += PAGE
+  }
+
+  // Only keep records whose task is in our filtered set
+  const taskIds = new Set(taskMap.keys())
+  const filtered = allRecords.filter((r) => r.task_id != null && taskIds.has(r.task_id))
+
+  // Group by month
+  const months = new Map<string, {
+    hours: number
+    taskHours: Map<number, number>
+  }>()
+
+  for (const r of filtered) {
+    const month = r.record_date.slice(0, 7) + '-01' // "YYYY-MM-01"
+    let bucket = months.get(month)
+    if (!bucket) { bucket = { hours: 0, taskHours: new Map() }; months.set(month, bucket) }
+    bucket.hours += Number(r.value_hours)
+    bucket.taskHours.set(r.task_id, (bucket.taskHours.get(r.task_id) ?? 0) + Number(r.value_hours))
+  }
+
+  // Build per-task total hours for overrun detection (matches v_monthly_trend CTE)
+  const taskTotalHours = new Map<number, number>()
+  for (const r of filtered) {
+    taskTotalHours.set(r.task_id, (taskTotalHours.get(r.task_id) ?? 0) + Number(r.value_hours))
+  }
+
+  // Produce MonthlyTrend rows
+  const result: MonthlyTrend[] = []
+  for (const [month, bucket] of Array.from(months.entries()).sort()) {
+    const activeTaskIds = Array.from(bucket.taskHours.keys())
+    const activeTasks = activeTaskIds.length
+
+    let unestimatedTasks = 0
+    let unestimatedHours = 0
+    let overrunTasks = 0
+    let overrunHours = 0
+    let estimatedCount = 0
+
+    for (const tid of activeTaskIds) {
+      const t = taskMap.get(tid)
+      if (!t) continue
+      const monthHours = bucket.taskHours.get(tid) ?? 0
+      if (t.estimate_hours == null) {
+        unestimatedTasks++
+        unestimatedHours += monthHours
+      } else {
+        estimatedCount++
+        const totalActual = taskTotalHours.get(tid) ?? 0
+        if (Number(t.estimate_hours) > 0 && totalActual > Number(t.estimate_hours)) {
+          overrunTasks++
+          overrunHours += monthHours
+        }
+      }
+    }
+
+    result.push({
+      month,
+      active_tasks: activeTasks,
+      total_hours: Math.round(bucket.hours * 100) / 100,
+      unestimated_tasks: unestimatedTasks,
+      unestimated_hours: Math.round(unestimatedHours * 100) / 100,
+      overrun_tasks: overrunTasks,
+      overrun_hours: Math.round(overrunHours * 100) / 100,
+      estimate_adoption_rate: activeTasks > 0 ? estimatedCount / activeTasks : null,
+    })
+  }
+
+  return result
+}

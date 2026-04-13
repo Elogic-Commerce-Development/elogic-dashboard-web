@@ -5,6 +5,7 @@ import {
   fetchRecentOverruns,
   fetchRecentUnestimated,
   fetchMonthlyTrend,
+  fetchMonthlyTrendFiltered,
   fetchAllTasksFiltered,
   type GlobalKpis,
   type RecentOverrun,
@@ -119,17 +120,15 @@ export function DashboardPage() {
 
     if (hasFilters) {
       // Filtered mode: fetch all tasks with filters, compute everything client-side
-      Promise.all([
-        fetchAllTasksFiltered(filters.projectIds, filters.userIds),
-        fetchMonthlyTrend(),
-      ])
-        .then(([tasks, t]) => {
+      fetchAllTasksFiltered(filters.projectIds, filters.userIds)
+        .then(async (tasks) => {
           if (cancelled) return
           setKpis(computeKpisFromTasks(tasks))
           const lists = computeShortlists(tasks)
           setTopOverruns(lists.overruns)
           setTopUnestimated(lists.unestimated)
-          setTrend(t)
+          const t = await fetchMonthlyTrendFiltered(filters.projectIds, filters.userIds, tasks)
+          if (!cancelled) setTrend(t)
         })
         .catch(() => {})
         .finally(() => { if (!cancelled) setLoading(false) })
