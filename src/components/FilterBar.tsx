@@ -40,7 +40,7 @@ function SearchableMultiSelect<T extends { id: number }>({
   }
 
   return (
-    <div className="w-[40%] min-w-[220px] shrink-0">
+    <div className="min-w-0 flex-1">
       <label className="mb-1 block text-xs font-medium text-neutral-600">
         {label} <span className="font-normal text-neutral-400">({summaryLabel})</span>
       </label>
@@ -108,9 +108,9 @@ export function FilterBar({ value, onChange, hideDateRange }: Props) {
   }, [users, value.userIds])
 
   return (
-    <div className="flex flex-wrap items-end gap-3 rounded-lg border border-neutral-200 bg-white px-4 py-3 shadow-sm">
+    <div className="space-y-3 rounded-lg border border-neutral-200 bg-white px-4 py-3 shadow-sm">
       {!hideDateRange && (
-        <>
+        <div className="flex items-end gap-3">
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-600">From</label>
             <input
@@ -130,36 +130,38 @@ export function FilterBar({ value, onChange, hideDateRange }: Props) {
               className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
             />
           </div>
-        </>
+        </div>
       )}
 
-      <SearchableMultiSelect
-        label="Projects"
-        summaryLabel={projectLabel}
-        items={projects}
-        selectedIds={value.projectIds}
-        onChange={(projectIds) => onChange({ ...value, projectIds })}
-        displayName={(p) => p.name}
-        searchPlaceholder="Search projects…"
-      />
+      <div className="flex items-end gap-3">
+        <SearchableMultiSelect
+          label="Projects"
+          summaryLabel={projectLabel}
+          items={projects}
+          selectedIds={value.projectIds}
+          onChange={(projectIds) => onChange({ ...value, projectIds })}
+          displayName={(p) => p.name}
+          searchPlaceholder="Search projects…"
+        />
 
-      <SearchableMultiSelect
-        label="Users"
-        summaryLabel={userLabel}
-        items={users}
-        selectedIds={value.userIds}
-        onChange={(userIds) => onChange({ ...value, userIds })}
-        displayName={(u) => u.display_name}
-        searchPlaceholder="Search users…"
-      />
+        <SearchableMultiSelect
+          label="Users"
+          summaryLabel={userLabel}
+          items={users}
+          selectedIds={value.userIds}
+          onChange={(userIds) => onChange({ ...value, userIds })}
+          displayName={(u) => u.display_name}
+          searchPlaceholder="Search users…"
+        />
 
-      <button
-        type="button"
-        onClick={() => onChange({ from: undefined, to: undefined, projectIds: [], userIds: [] })}
-        className="ml-auto self-end rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
-      >
-        Clear
-      </button>
+        <button
+          type="button"
+          onClick={() => onChange({ from: undefined, to: undefined, projectIds: [], userIds: [] })}
+          className="shrink-0 self-end rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+        >
+          Clear
+        </button>
+      </div>
     </div>
   )
 }
