@@ -107,33 +107,47 @@ export function FilterBar({ value, onChange, hideDateRange }: Props) {
     return `${value.userIds.length} users`
   }, [users, value.userIds])
 
+  const clearButton = (
+    <button
+      type="button"
+      onClick={() => onChange({ from: undefined, to: undefined, projectIds: [], userIds: [] })}
+      className="shrink-0 rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+    >
+      Clear
+    </button>
+  )
+
   return (
     <div className="space-y-3 rounded-lg border border-neutral-200 bg-white px-4 py-3 shadow-sm">
-      {!hideDateRange && (
-        <div className="flex items-end gap-3">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">From</label>
-            <input
-              type="date"
-              value={value.from ?? ''}
-              onChange={(e) => onChange({ ...value, from: e.target.value || undefined })}
-              className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-600">To</label>
-            <input
-              type="date"
-              value={value.to ?? ''}
-              onChange={(e) => onChange({ ...value, to: e.target.value || undefined })}
-              className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
-            />
-          </div>
-        </div>
-      )}
-
       <div className="flex items-end gap-3">
+        {!hideDateRange && (
+          <>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-600">From</label>
+              <input
+                type="date"
+                value={value.from ?? ''}
+                onChange={(e) => onChange({ ...value, from: e.target.value || undefined })}
+                className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-600">To</label>
+              <input
+                type="date"
+                value={value.to ?? ''}
+                onChange={(e) => onChange({ ...value, to: e.target.value || undefined })}
+                className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+              />
+            </div>
+          </>
+        )}
+
+        <div className="ml-auto">{clearButton}</div>
+      </div>
+
+      <div className="flex gap-3">
         <SearchableMultiSelect
           label="Projects"
           summaryLabel={projectLabel}
@@ -153,14 +167,6 @@ export function FilterBar({ value, onChange, hideDateRange }: Props) {
           displayName={(u) => u.display_name}
           searchPlaceholder="Search users…"
         />
-
-        <button
-          type="button"
-          onClick={() => onChange({ from: undefined, to: undefined, projectIds: [], userIds: [] })}
-          className="shrink-0 self-end rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
-        >
-          Clear
-        </button>
       </div>
     </div>
   )
