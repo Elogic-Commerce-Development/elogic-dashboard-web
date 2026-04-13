@@ -100,6 +100,39 @@ export type TaskContributor = {
   share: number | null
 }
 
+export type MonthlyTrend = {
+  month: string
+  active_tasks: number
+  total_hours: number
+  unestimated_tasks: number
+  unestimated_hours: number
+  overrun_tasks: number
+  overrun_hours: number
+  estimate_adoption_rate: number | null
+}
+
+export type RecentUnestimated = {
+  task_id: number
+  task_name: string
+  project_id: number
+  project_name: string
+  recent_hours: number
+  total_hours: number
+  last_record_date: string
+}
+
+export type RecentOverrun = {
+  task_id: number
+  task_name: string
+  project_id: number
+  project_name: string
+  estimate_hours: number
+  actual_hours: number
+  ratio: number
+  recent_hours: number
+  last_record_date: string
+}
+
 export type ProjectListItem = { id: number; name: string }
 export type UserListItem = { id: number; display_name: string }
 
@@ -262,4 +295,31 @@ export async function fetchTopOverruns(limit = 5): Promise<TaskActualVsEstimate[
     .limit(limit)
   if (error) throw error
   return (data ?? []) as TaskActualVsEstimate[]
+}
+
+export async function fetchRecentUnestimated(limit = 5): Promise<RecentUnestimated[]> {
+  const { data, error } = await supabase
+    .from('v_recent_unestimated_activity')
+    .select('*')
+    .limit(limit)
+  if (error) throw error
+  return (data ?? []) as RecentUnestimated[]
+}
+
+export async function fetchRecentOverruns(limit = 5): Promise<RecentOverrun[]> {
+  const { data, error } = await supabase
+    .from('v_recent_overrun_activity')
+    .select('*')
+    .limit(limit)
+  if (error) throw error
+  return (data ?? []) as RecentOverrun[]
+}
+
+export async function fetchMonthlyTrend(): Promise<MonthlyTrend[]> {
+  const { data, error } = await supabase
+    .from('v_monthly_trend')
+    .select('*')
+    .order('month', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as MonthlyTrend[]
 }

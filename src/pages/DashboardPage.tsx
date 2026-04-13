@@ -2,12 +2,16 @@ import { useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
   fetchGlobalKpis,
-  fetchTopOverruns,
-  fetchTopUnestimatedWithTime,
+  fetchRecentOverruns,
+  fetchRecentUnestimated,
+  fetchMonthlyTrend,
   type GlobalKpis,
-  type TaskActualVsEstimate,
+  type RecentOverrun,
+  type RecentUnestimated,
+  type MonthlyTrend,
 } from '@/lib/queries'
 import { formatHours, formatRatio, acTaskUrl } from '@/lib/format'
+import { TrendCharts } from '@/components/TrendCharts'
 
 function KpiCard({
   label,
@@ -34,19 +38,26 @@ function KpiCard({
 
 export function DashboardPage() {
   const [kpis, setKpis] = useState<GlobalKpis | null>(null)
-  const [topOverruns, setTopOverruns] = useState<TaskActualVsEstimate[]>([])
-  const [topUnestimated, setTopUnestimated] = useState<TaskActualVsEstimate[]>([])
+  const [topOverruns, setTopOverruns] = useState<RecentOverrun[]>([])
+  const [topUnestimated, setTopUnestimated] = useState<RecentUnestimated[]>([])
+  const [trend, setTrend] = useState<MonthlyTrend[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    Promise.all([fetchGlobalKpis(), fetchTopOverruns(5), fetchTopUnestimatedWithTime(5)])
-      .then(([k, overruns, unest]) => {
+    Promise.all([
+      fetchGlobalKpis(),
+      fetchRecentOverruns(5),
+      fetchRecentUnestimated(5),
+      fetchMonthlyTrend(),
+    ])
+      .then(([k, overruns, unest, t]) => {
         if (cancelled) return
         setKpis(k)
         setTopOverruns(overruns)
         setTopUnestimated(unest)
+        setTrend(t)
       })
       .catch(() => {})
       .finally(() => {
@@ -102,10 +113,12 @@ export function DashboardPage() {
         />
       </div>
 
+      <TrendCharts data={trend} />
+
       <div className="grid gap-6 lg:grid-cols-2">
         <ShortlistCard
-          title="Worst overruns"
-          description="Tasks with the highest overrun ratio."
+          title="Active overruns (last 30 days)"
+          description="Overrun tasks with the most hours tracked recently."
           viewAllTo="/overview"
           rows={topOverruns}
           renderRow={(row) => (
@@ -139,12 +152,12 @@ export function DashboardPage() {
               </div>
               <div className="shrink-0 text-right">
                 <span className={`text-sm font-semibold ${
-                  (row.ratio ?? 0) >= 2 ? 'text-red-600' : (row.ratio ?? 0) >= 1.5 ? 'text-amber-600' : ''
+                  Number(row.ratio) >= 2 ? 'text-red-600' : Number(row.ratio) >= 1.5 ? 'text-amber-600' : ''
                 }`}>
-                  {formatRatio(row.ratio)}
+                  {formatRatio(Number(row.ratio))}
                 </span>
                 <div className="text-xs text-neutral-400">
-                  {formatHours(row.actual_hours)} / {formatHours(row.estimate_hours)}
+                  {formatHours(Number(row.recent_hours))} recent / {formatHours(Number(row.actual_hours))} total
                 </div>
               </div>
             </div>
@@ -152,8 +165,8 @@ export function DashboardPage() {
         />
 
         <ShortlistCard
-          title="Most hours without estimate"
-          description="Unestimated tasks with the most tracked time."
+          title="Unestimated with recent time (last 30 days)"
+          description="Open tasks without estimates being actively worked on."
           viewAllTo="/overview"
           rows={topUnestimated}
           renderRow={(row) => (
@@ -185,8 +198,13 @@ export function DashboardPage() {
                   {row.project_name}
                 </Link>
               </div>
-              <div className="shrink-0 text-sm font-semibold text-amber-600">
-                {formatHours(row.actual_hours)}
+              <div className="shrink-0 text-right">
+                <span className="text-sm font-semibold text-amber-600">
+                  {formatHours(Number(row.recent_hours))}
+                </span>
+                <div className="text-xs text-neutral-400">
+                  {formatHours(Number(row.total_hours))} total
+                </div>
               </div>
             </div>
           )}
