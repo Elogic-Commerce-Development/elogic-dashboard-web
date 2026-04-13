@@ -7,7 +7,7 @@ import type { TaskActualVsEstimate, RecentOverrun } from '@/lib/queries'
 import { formatHours, acProjectUrl, acTaskUrl } from '@/lib/format'
 
 type ProjectInfo = { id: number; name: string; is_completed: boolean }
-type TaskFilter = 'all' | 'open-overrun' | 'open-unestimated-active'
+type TaskFilter = 'all' | 'unestimated' | 'open-unestimated-active' | 'overrun' | 'open-overrun' | 'recent-overrun'
 
 const taskColumns: ColumnDef<TaskActualVsEstimate>[] = [
   {
@@ -240,11 +240,18 @@ export function ProjectDetailPage() {
     return { hours: overrunHours, pct, taskCount: recentOverruns.length }
   }, [recentOverruns])
 
+  const recentOverrunTaskIds = useMemo(() => new Set(recentOverruns.map(r => r.task_id)), [recentOverruns])
+
   const filteredTasks = useMemo(() => {
-    if (taskFilter === 'open-overrun') return tasks.filter(isOpenOverrun)
-    if (taskFilter === 'open-unestimated-active') return tasks.filter(isOpenUnestimatedActive)
-    return tasks
-  }, [tasks, taskFilter])
+    switch (taskFilter) {
+      case 'unestimated': return tasks.filter(t => t.estimate_hours == null)
+      case 'open-unestimated-active': return tasks.filter(isOpenUnestimatedActive)
+      case 'overrun': return tasks.filter(t => t.estimate_hours != null && Number(t.estimate_hours) > 0 && Number(t.actual_hours) > Number(t.estimate_hours))
+      case 'open-overrun': return tasks.filter(isOpenOverrun)
+      case 'recent-overrun': return tasks.filter(t => recentOverrunTaskIds.has(t.task_id))
+      default: return tasks
+    }
+  }, [tasks, taskFilter, recentOverrunTaskIds])
 
   const toggleFilter = (f: TaskFilter) => setTaskFilter(prev => prev === f ? 'all' : f)
 
@@ -281,6 +288,8 @@ export function ProjectDetailPage() {
           value={String(metrics.totalWithoutEstimate)}
           sub={`${metrics.openWithoutEstimate} open`}
           color={metrics.totalWithoutEstimate > 0 ? 'amber' : 'emerald'}
+          active={taskFilter === 'unestimated'}
+          onClick={() => toggleFilter('unestimated')}
         />
         <KpiCard
           label="Open w/o estimate, active"
@@ -288,19 +297,23 @@ export function ProjectDetailPage() {
           sub="open + tracked time"
           color={metrics.openWithoutEstimateWithTime > 0 ? 'orange' : 'emerald'}
           active={taskFilter === 'open-unestimated-active'}
-          onClick={metrics.openWithoutEstimateWithTime > 0 ? () => toggleFilter('open-unestimated-active') : undefined}
+          onClick={() => toggleFilter('open-unestimated-active')}
         />
         <KpiCard
           label="Total overrun"
           value={formatHours(metrics.totalOverrunHours)}
           sub={`${metrics.totalOverrunPct}% of estimates`}
           color={metrics.totalOverrunHours > 0 ? 'red' : 'emerald'}
+          active={taskFilter === 'overrun'}
+          onClick={() => toggleFilter('overrun')}
         />
         <KpiCard
           label="Last 30d overrun"
           value={formatHours(lastMonthMetrics.hours)}
           sub={`${lastMonthMetrics.pct}% of estimates`}
           color={lastMonthMetrics.hours > 0 ? 'red' : 'emerald'}
+          active={taskFilter === 'recent-overrun'}
+          onClick={() => toggleFilter('recent-overrun')}
         />
         <KpiCard
           label="Overrun tasks"
@@ -308,61 +321,28 @@ export function ProjectDetailPage() {
           sub={`${metrics.openOverrunCount} open`}
           color={metrics.openOverrunCount > 0 ? 'red' : metrics.overrunTaskCount > 0 ? 'amber' : 'emerald'}
           active={taskFilter === 'open-overrun'}
-          onClick={metrics.openOverrunCount > 0 ? () => toggleFilter('open-overrun') : undefined}
+          onClick={() => toggleFilter('open-overrun')}
         />
         <KpiCard
           label="Total tasks"
           value={String(tasks.length)}
           color={taskFilter !== 'all' ? 'blue' : 'neutral'}
-          onClick={taskFilter !== 'all' ? () => setTaskFilter('all') : undefined}
-          sub={taskFilter !== 'all' ? 'click to reset filter' : undefined}
+          onClick={() => setTaskFilter('all')}
         />
       </div>
 
-      {/* Filter pills */}
-      {(metrics.openOverrunCount > 0 || metrics.openWithoutEstimateWithTime > 0) && (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-medium text-neutral-400">Show:</span>
+      {/* Active filter indicator */}
+      {taskFilter !== 'all' && (
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-neutral-500">
+            Filtered: <span className="font-semibold">{filteredTasks.length}</span> of {tasks.length} tasks
+          </span>
           <button
             onClick={() => setTaskFilter('all')}
-            className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-              taskFilter === 'all'
-                ? 'border-neutral-900 bg-neutral-900 text-white'
-                : 'border-neutral-300 bg-white text-neutral-600 hover:border-neutral-400 hover:bg-neutral-50'
-            }`}
+            className="rounded-full border border-neutral-300 bg-white px-2.5 py-0.5 text-xs font-medium text-neutral-600 transition-colors hover:bg-neutral-100"
           >
-            All tasks ({tasks.length})
+            Clear filter
           </button>
-          {metrics.openOverrunCount > 0 && (
-            <button
-              onClick={() => toggleFilter('open-overrun')}
-              className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                taskFilter === 'open-overrun'
-                  ? 'border-red-600 bg-red-600 text-white'
-                  : 'border-red-200 bg-red-50 text-red-700 hover:border-red-300 hover:bg-red-100'
-              }`}
-            >
-              <span className={`inline-block h-2 w-2 rounded-full ${
-                taskFilter === 'open-overrun' ? 'bg-white' : 'bg-red-400'
-              }`} />
-              Open + overrun ({metrics.openOverrunCount})
-            </button>
-          )}
-          {metrics.openWithoutEstimateWithTime > 0 && (
-            <button
-              onClick={() => toggleFilter('open-unestimated-active')}
-              className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                taskFilter === 'open-unestimated-active'
-                  ? 'border-amber-600 bg-amber-600 text-white'
-                  : 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100'
-              }`}
-            >
-              <span className={`inline-block h-2 w-2 rounded-full ${
-                taskFilter === 'open-unestimated-active' ? 'bg-white' : 'bg-amber-400'
-              }`} />
-              Open, no estimate, tracked time ({metrics.openWithoutEstimateWithTime})
-            </button>
-          )}
         </div>
       )}
 
