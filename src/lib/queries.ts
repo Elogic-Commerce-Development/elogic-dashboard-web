@@ -25,6 +25,7 @@ export type TaskActualVsEstimate = {
   is_completed: boolean
   completed_on: string | null
   created_on: string
+  last_record_date: string | null
 }
 
 export type EstimateAccuracyByUser = {
