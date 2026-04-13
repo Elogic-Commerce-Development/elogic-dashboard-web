@@ -40,7 +40,7 @@ function SearchableMultiSelect<T extends { id: number }>({
   }
 
   return (
-    <div className="w-[40%] min-w-[220px]">
+    <div className="w-[40%] min-w-[220px] shrink-0">
       <label className="mb-1 block text-xs font-medium text-neutral-600">
         {label} <span className="font-normal text-neutral-400">({summaryLabel})</span>
       </label>
