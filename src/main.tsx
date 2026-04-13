@@ -1,10 +1,11 @@
 import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { RouterProvider } from '@tanstack/react-router'
 import type { Session } from '@supabase/supabase-js'
 import './index.css'
 import { supabase } from '@/lib/supabase'
 import { LoginForm } from '@/components/LoginForm'
-import { AppShell } from '@/components/AppShell'
+import { router } from '@/router'
 
 function AuthGate() {
   const [session, setSession] = useState<Session | null>(null)
@@ -24,7 +25,7 @@ function AuthGate() {
   if (!ready) {
     return (
       <div className="flex min-h-screen items-center justify-center text-sm text-neutral-500">
-        Loading…
+        Loading...
       </div>
     )
   }
@@ -33,7 +34,7 @@ function AuthGate() {
     return <LoginForm />
   }
 
-  return <AppShell email={session.user.email ?? ''} />
+  return <RouterProvider router={router} />
 }
 
 createRoot(document.getElementById('root')!).render(

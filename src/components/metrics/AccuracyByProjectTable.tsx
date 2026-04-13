@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '../DataTable'
 import type { Filters } from '@/lib/filters'
@@ -6,7 +7,19 @@ import { fetchAccuracyByProject, type EstimateAccuracyByProject } from '@/lib/qu
 import { formatRatio } from '@/lib/format'
 
 const columns: ColumnDef<EstimateAccuracyByProject>[] = [
-  { accessorKey: 'project_name', header: 'Project' },
+  {
+    accessorKey: 'project_name',
+    header: 'Project',
+    cell: ({ row }) => (
+      <Link
+        to="/projects/$projectId"
+        params={{ projectId: String(row.original.project_id) }}
+        className="text-neutral-700 hover:text-blue-600 hover:underline"
+      >
+        {row.original.project_name}
+      </Link>
+    ),
+  },
   { accessorKey: 'total_tasks', header: 'Total tasks' },
   { accessorKey: 'estimated_tasks', header: 'Estimated' },
   {
