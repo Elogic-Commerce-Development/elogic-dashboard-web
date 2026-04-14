@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Outlet, Link, useRouterState } from '@tanstack/react-router'
 import { supabase } from '@/lib/supabase'
 import { defaultFilters, type Filters } from '@/lib/filters'
 import { FilterContext } from '@/lib/FilterContext'
+import { fetchOutsourcingProjectIds } from '@/lib/queries'
 import { FilterBar } from './FilterBar'
 import { SyncStatusBadge } from './SyncStatusBadge'
 import { TrackingSinceBanner } from './TrackingSinceBanner'
@@ -16,11 +17,19 @@ const navItems = [
 
 export function AppLayout() {
   const [filters, setFilters] = useState<Filters>(defaultFilters)
+  const [outsourcingProjectIds, setOutsourcingProjectIds] = useState<number[]>([])
   const routerState = useRouterState()
   const pathname = routerState.location.pathname
+  const isDashboard = pathname === '/'
+
+  useEffect(() => {
+    fetchOutsourcingProjectIds()
+      .then(setOutsourcingProjectIds)
+      .catch(() => setOutsourcingProjectIds([]))
+  }, [])
 
   return (
-    <FilterContext value={{ filters, setFilters }}>
+    <FilterContext value={{ filters, setFilters, outsourcingProjectIds }}>
       <div className="min-h-screen bg-neutral-50">
         <header className="border-b border-neutral-200 bg-white">
           <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
@@ -65,7 +74,12 @@ export function AppLayout() {
 
         <main className="mx-auto max-w-7xl space-y-5 px-6 py-6">
           <TrackingSinceBanner />
-          <FilterBar value={filters} onChange={setFilters} hideDateRange={pathname === '/'} />
+          <FilterBar
+            value={filters}
+            onChange={setFilters}
+            hideDateRange={isDashboard}
+            scopedProjectIds={isDashboard ? outsourcingProjectIds : undefined}
+          />
           <Outlet />
         </main>
       </div>
