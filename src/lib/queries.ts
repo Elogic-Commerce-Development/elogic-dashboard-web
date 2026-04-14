@@ -250,11 +250,11 @@ export async function fetchProjects(): Promise<ProjectListItem[]> {
  * The dashboard is scoped to these projects only.
  */
 export async function fetchOutsourcingProjectIds(): Promise<number[]> {
-  // First find the label ID
+  // First find the label ID (name has a leading space in AC data, so use ilike)
   const { data: labels, error: labelsErr } = await supabase
     .from('labels')
     .select('id')
-    .eq('name', 'OUTSOURCING PROJECT')
+    .ilike('name', '%OUTSOURCING PROJECT%')
     .eq('scope', 'project')
     .limit(1)
   if (labelsErr) throw labelsErr
