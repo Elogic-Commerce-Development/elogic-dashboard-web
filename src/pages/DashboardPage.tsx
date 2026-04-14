@@ -1,10 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
-  fetchGlobalKpis,
-  fetchRecentOverruns,
-  fetchRecentUnestimated,
-  fetchMonthlyTrend,
   fetchMonthlyTrendFiltered,
   fetchAllTasksFiltered,
   type GlobalKpis,
@@ -105,8 +101,15 @@ function computeShortlists(tasks: TaskActualVsEstimate[]) {
 }
 
 export function DashboardPage() {
-  const { filters } = useFilters()
-  const hasFilters = filters.projectIds.length > 0 || filters.userIds.length > 0
+  const { filters, outsourcingProjectIds } = useFilters()
+
+  // Dashboard is always scoped to outsourcing projects.
+  // If user selects specific projects in the filter, use those (they're
+  // already limited to outsourcing projects by the FilterBar scope).
+  // Otherwise use all outsourcing project IDs.
+  const effectiveProjectIds = filters.projectIds.length > 0
+    ? filters.projectIds
+    : outsourcingProjectIds
 
   const [kpis, setKpis] = useState<GlobalKpis | null>(null)
   const [topOverruns, setTopOverruns] = useState<RecentOverrun[]>([])
@@ -115,44 +118,28 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    // Wait until outsourcing scope is loaded
+    if (outsourcingProjectIds.length === 0) return
+
     let cancelled = false
     setLoading(true)
 
-    if (hasFilters) {
-      // Filtered mode: fetch all tasks with filters, compute everything client-side
-      fetchAllTasksFiltered(filters.projectIds, filters.userIds)
-        .then(async (tasks) => {
-          if (cancelled) return
-          setKpis(computeKpisFromTasks(tasks))
-          const lists = computeShortlists(tasks)
-          setTopOverruns(lists.overruns)
-          setTopUnestimated(lists.unestimated)
-          const t = await fetchMonthlyTrendFiltered(filters.projectIds, filters.userIds, tasks)
-          if (!cancelled) setTrend(t)
-        })
-        .catch(() => {})
-        .finally(() => { if (!cancelled) setLoading(false) })
-    } else {
-      // Unfiltered mode: use pre-aggregated views (fast)
-      Promise.all([
-        fetchGlobalKpis(),
-        fetchRecentOverruns(5),
-        fetchRecentUnestimated(5),
-        fetchMonthlyTrend(),
-      ])
-        .then(([k, overruns, unest, t]) => {
-          if (cancelled) return
-          setKpis(k)
-          setTopOverruns(overruns)
-          setTopUnestimated(unest)
-          setTrend(t)
-        })
-        .catch(() => {})
-        .finally(() => { if (!cancelled) setLoading(false) })
-    }
+    // Always use filtered mode — dashboard is scoped to outsourcing projects
+    fetchAllTasksFiltered(effectiveProjectIds, filters.userIds)
+      .then(async (tasks) => {
+        if (cancelled) return
+        setKpis(computeKpisFromTasks(tasks))
+        const lists = computeShortlists(tasks)
+        setTopOverruns(lists.overruns)
+        setTopUnestimated(lists.unestimated)
+        const t = await fetchMonthlyTrendFiltered(effectiveProjectIds, filters.userIds, tasks)
+        if (!cancelled) setTrend(t)
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false) })
 
     return () => { cancelled = true }
-  }, [hasFilters, filters.projectIds, filters.userIds])
+  }, [outsourcingProjectIds, effectiveProjectIds, filters.userIds])
 
   if (loading) {
     return <div className="py-12 text-center text-sm text-neutral-400">Loading dashboard...</div>

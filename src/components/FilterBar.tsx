@@ -6,6 +6,8 @@ type Props = {
   value: Filters
   onChange: (next: Filters) => void
   hideDateRange?: boolean
+  /** When set, only these project IDs appear in the Projects dropdown */
+  scopedProjectIds?: number[]
 }
 
 function SearchableMultiSelect<T extends { id: number }>({
@@ -80,14 +82,20 @@ function SearchableMultiSelect<T extends { id: number }>({
   )
 }
 
-export function FilterBar({ value, onChange, hideDateRange }: Props) {
-  const [projects, setProjects] = useState<ProjectListItem[]>([])
+export function FilterBar({ value, onChange, hideDateRange, scopedProjectIds }: Props) {
+  const [allProjects, setAllProjects] = useState<ProjectListItem[]>([])
   const [users, setUsers] = useState<UserListItem[]>([])
 
   useEffect(() => {
-    fetchProjects().then(setProjects).catch(() => setProjects([]))
+    fetchProjects().then(setAllProjects).catch(() => setAllProjects([]))
     fetchUsers().then(setUsers).catch(() => setUsers([]))
   }, [])
+
+  const projects = useMemo(() => {
+    if (!scopedProjectIds) return allProjects
+    const scopeSet = new Set(scopedProjectIds)
+    return allProjects.filter((p) => scopeSet.has(p.id))
+  }, [allProjects, scopedProjectIds])
 
   const projectLabel = useMemo(() => {
     if (value.projectIds.length === 0) return 'All projects'

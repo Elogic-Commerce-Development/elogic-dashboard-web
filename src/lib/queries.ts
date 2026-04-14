@@ -134,7 +134,7 @@ export type RecentOverrun = {
   last_record_date: string
 }
 
-export type ProjectListItem = { id: number; name: string }
+export type ProjectListItem = { id: number; name: string; label_id: number | null }
 export type UserListItem = { id: number; display_name: string }
 
 export async function fetchTasksWithoutEstimates(filters: Filters): Promise<TaskWithoutEstimate[]> {
@@ -238,11 +238,38 @@ export async function fetchSyncStatus(): Promise<SyncStatusRow | null> {
 export async function fetchProjects(): Promise<ProjectListItem[]> {
   const { data, error } = await supabase
     .from('projects')
-    .select('id, name')
+    .select('id, name, label_id')
     .eq('is_trashed', false)
     .order('name', { ascending: true })
   if (error) throw error
   return (data ?? []) as ProjectListItem[]
+}
+
+/**
+ * Returns the IDs of projects labeled "OUTSOURCING PROJECT".
+ * The dashboard is scoped to these projects only.
+ */
+export async function fetchOutsourcingProjectIds(): Promise<number[]> {
+  // First find the label ID
+  const { data: labels, error: labelsErr } = await supabase
+    .from('labels')
+    .select('id')
+    .eq('name', 'OUTSOURCING PROJECT')
+    .eq('scope', 'project')
+    .limit(1)
+  if (labelsErr) throw labelsErr
+  if (!labels || labels.length === 0) return []
+
+  const labelId = labels[0].id
+
+  // Then find all projects with that label
+  const { data: projects, error: projErr } = await supabase
+    .from('projects')
+    .select('id')
+    .eq('label_id', labelId)
+    .eq('is_trashed', false)
+  if (projErr) throw projErr
+  return (projects ?? []).map((p) => p.id)
 }
 
 export async function fetchUsers(): Promise<UserListItem[]> {
