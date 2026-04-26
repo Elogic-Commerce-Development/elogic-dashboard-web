@@ -137,6 +137,39 @@ export type RecentOverrun = {
 export type ProjectListItem = { id: number; name: string; label_id: number | null }
 export type UserListItem = { id: number; display_name: string }
 
+export type UserDetail = {
+  id: number
+  display_name: string
+  email: string
+  class: string | null
+  is_archived: boolean
+  is_trashed: boolean
+  peopleforce_id: number | null
+}
+
+export type EmployeeDay = {
+  user_id: number
+  display_name: string
+  pf_id: number
+  pf_status: string | null
+  date: string                              // ISO date YYYY-MM-DD
+  isodow: number                            // 1=Mon..7=Sun
+  is_weekend: boolean
+  expected_hours_base: number               // pattern hours (0 on weekends)
+  holiday_name: string | null
+  holiday_is_working: boolean
+  is_non_working_holiday: boolean
+  leave_bucket:
+    | 'vacation' | 'sick' | 'other_paid' | 'other_unpaid'
+    | 'wfh' | 'bench' | 'unmapped'
+    | null
+  leave_policy_name: string | null
+  leave_amount: number | null
+  leave_unit: 'days' | 'hours' | null
+  expected_hours: number                    // after weekend/holiday/leave reductions
+  tracked_hours: number
+}
+
 export async function fetchTasksWithoutEstimates(filters: Filters): Promise<TaskWithoutEstimate[]> {
   let q = supabase
     .from('v_tasks_without_estimates')
@@ -297,14 +330,63 @@ export async function fetchContributorStats(): Promise<ContributorStats[]> {
   return (data ?? []) as ContributorStats[]
 }
 
-export async function fetchContributorTaskSummary(contributorId: number): Promise<ContributorTaskSummary[]> {
-  const { data, error } = await supabase
+export async function fetchContributorTaskSummary(
+  contributorId: number,
+  range?: { from?: string; to?: string },
+): Promise<ContributorTaskSummary[]> {
+  let q = supabase
     .from('v_contributor_task_summary')
     .select('*')
     .eq('contributor_id', contributorId)
     .order('created_on', { ascending: false })
+
+  // Period filter applies to the task's creation date — same convention as
+  // the other AC views. Tasks created before `from` but with time logged
+  // inside the range are excluded; that's the same behavior the other tables
+  // have, and matches what the user expects when scoping to a period.
+  if (range?.from) q = q.gte('created_on', range.from)
+  if (range?.to) q = q.lte('created_on', range.to + 'T23:59:59.999Z')
+
+  const { data, error } = await q
   if (error) throw error
   return (data ?? []) as ContributorTaskSummary[]
+}
+
+export async function fetchUserDetail(userId: number): Promise<UserDetail | null> {
+  const { data, error } = await supabase
+    .from('users')
+    .select('id, display_name, email, class, is_archived, is_trashed, peopleforce_id')
+    .eq('id', userId)
+    .maybeSingle()
+  if (error) throw error
+  return (data as UserDetail | null) ?? null
+}
+
+/**
+ * Per-(user, day) rows from v_employee_day filtered to the given range.
+ * Returns [] if the user has no PF link (the view INNER JOINs to pf_employees
+ * via peopleforce_id IS NOT NULL, so unlinked users have no rows).
+ *
+ * The range is inclusive on both ends (PostgREST `gte` + `lte` against `date`).
+ *
+ * Even a year of daily rows is ~365 — well under Supabase's default 1000 row
+ * limit. We bump it to 2000 just in case to handle 2-year custom ranges.
+ */
+export async function fetchEmployeeDays(
+  userId: number,
+  from: string,
+  to: string,
+): Promise<EmployeeDay[]> {
+  const { data, error } = await supabase
+    .from('v_employee_day')
+    .select('*')
+    .eq('user_id', userId)
+    .gte('date', from)
+    .lte('date', to)
+    .order('date', { ascending: true })
+    .limit(2000)
+  if (error) throw error
+  return (data ?? []) as EmployeeDay[]
 }
 
 export async function fetchTaskContributors(taskId: number): Promise<TaskContributor[]> {

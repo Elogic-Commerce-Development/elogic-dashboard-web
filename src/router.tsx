@@ -7,6 +7,16 @@ import { PeoplePage } from '@/pages/PeoplePage'
 import { ProjectDetailPage } from '@/pages/ProjectDetailPage'
 import { ContributorDetailPage } from '@/pages/ContributorDetailPage'
 import { TaskDetailPage } from '@/pages/TaskDetailPage'
+import { isValidPreset, type PeriodPreset } from '@/lib/period'
+
+export type ContributorDetailSearch = {
+  // All optional so existing <Link to="/people/$userId"> call sites without
+  // search params remain valid. Component defaults to 'current_month' when
+  // preset is missing.
+  preset?: PeriodPreset
+  from?: string
+  to?: string
+}
 
 const rootRoute = createRootRoute({
   component: AppLayout,
@@ -46,6 +56,14 @@ const contributorDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/people/$userId',
   component: ContributorDetailPage,
+  validateSearch: (search: Record<string, unknown>): ContributorDetailSearch => {
+    const rawPreset = typeof search.preset === 'string' ? search.preset : undefined
+    return {
+      preset: isValidPreset(rawPreset) ? rawPreset : undefined,
+      from: typeof search.from === 'string' ? search.from : undefined,
+      to: typeof search.to === 'string' ? search.to : undefined,
+    }
+  },
 })
 
 const taskDetailRoute = createRoute({
