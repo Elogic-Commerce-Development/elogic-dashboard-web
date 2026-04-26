@@ -1,4 +1,4 @@
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
+import { Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 import { BUCKET_COLORS, BUCKET_LABELS, type UtilizationBucket, type UtilizationSummary } from '@/lib/utilization'
 
 type Props = { summary: UtilizationSummary }
@@ -18,12 +18,15 @@ const SLICE_ORDER: UtilizationBucket[] = [
 ]
 
 export function UtilizationDonut({ summary }: Props) {
+  // Recharts 3 reads `fill` from each data item directly — using <Cell>
+  // children inside <Pie> made the chart compute angles from the cells
+  // (rendering as a tiny ~28° wedge) instead of from the data values.
   const data = SLICE_ORDER
     .map((bucket) => ({
       bucket,
       label: BUCKET_LABELS[bucket],
       value: summary.buckets[bucket],
-      color: BUCKET_COLORS[bucket],
+      fill: BUCKET_COLORS[bucket],
     }))
     .filter((s) => s.value > 0)
 
@@ -59,13 +62,13 @@ export function UtilizationDonut({ summary }: Props) {
                 cy="50%"
                 innerRadius={60}
                 outerRadius={100}
+                startAngle={90}
+                endAngle={-270}
                 stroke="#fff"
                 strokeWidth={2}
-              >
-                {data.map((s) => (
-                  <Cell key={s.bucket} fill={s.color} />
-                ))}
-              </Pie>
+                isAnimationActive={false}
+              />
+              {/* Sector colors come from each data item's `fill` field. */}
               <Tooltip
                 contentStyle={{ fontSize: 12 }}
                 formatter={(value, name) => [`${Number(value ?? 0).toFixed(1)}h`, name]}
@@ -89,7 +92,7 @@ export function UtilizationDonut({ summary }: Props) {
                   <span
                     aria-hidden
                     className="inline-block h-2.5 w-2.5 rounded-sm"
-                    style={{ backgroundColor: s.color }}
+                    style={{ backgroundColor: s.fill }}
                   />
                   <span className="text-neutral-700">{s.label}</span>
                 </span>
