@@ -1,51 +1,51 @@
 import type { EmployeeDay } from './queries'
 
 /**
- * Visualization baseline used for weekend slices in the chart so they show
- * non-zero area. Matches the typical Mon–Fri 8h pattern; if a part-time
- * employee is being viewed, this is still 8h for visual consistency.
+ * The chart denominator is "working hours in the period" — the number of
+ * hours the employee was scheduled to work, excluding weekends and excluding
+ * non-working public holidays. A typical week is 40h; a week with one
+ * non-working holiday is 32h.
  *
- * The plan §7.3 notes this as the explicit "weekends use 8h baseline" rule.
+ * Slices of that denominator (mutually exclusive):
+ *   tracked         — hours the employee logged (capped at working_hours - absences)
+ *   missing         — expected-and-not-logged: working_hours - absences - tracked (>=0)
+ *   vacation        — paid vacation (dashboard_bucket = 'vacation')
+ *   sick            — sick leave (dashboard_bucket = 'sick')
+ *   unpaid_leave    — unpaid time off (dashboard_bucket = 'other_unpaid')
+ *   other_absence   — bench, generic other_paid leaves, unmapped → all collapsed
+ *
+ * NOT in the chart (but surfaced separately):
+ *   weekend_hours, holiday_hours — pure calendar info, excluded from denominator
+ *   wfh_day_count                — informational only (WFH is a normal working day)
+ *   over_tracked_hours           — hours beyond working_hours_after_absences
+ *   unmapped_leave_hours         — surfaced as a warning if > 0
  */
-const WEEKEND_VIS_HOURS = 8
 
 export type UtilizationBucket =
   | 'tracked'
-  | 'over_tracked'
-  | 'untracked_working'
+  | 'missing'
   | 'vacation'
   | 'sick'
-  | 'other_paid'
-  | 'other_unpaid'
-  | 'bench'
-  | 'holiday'
-  | 'weekend'
+  | 'unpaid_leave'
+  | 'other_absence'
 
 export const BUCKET_LABELS: Record<UtilizationBucket, string> = {
   tracked: 'Tracked',
-  over_tracked: 'Over-tracked',
-  untracked_working: 'Untracked working',
+  missing: 'Missing',
   vacation: 'Vacation',
   sick: 'Sick leave',
-  other_paid: 'Other paid leave',
-  other_unpaid: 'Other unpaid leave',
-  bench: 'Bench',
-  holiday: 'Public holiday',
-  weekend: 'Weekend',
+  unpaid_leave: 'Unpaid leave',
+  other_absence: 'Other absence',
 }
 
-/** Tailwind color hex values used by Recharts (cannot use Tailwind class names). */
+/** Tailwind hex values used by Recharts (cannot use Tailwind class names). */
 export const BUCKET_COLORS: Record<UtilizationBucket, string> = {
-  tracked: '#059669',          // emerald-600
-  over_tracked: '#db2777',     // pink-600
-  untracked_working: '#dc2626', // red-600
-  vacation: '#2563eb',         // blue-600
-  sick: '#d97706',             // amber-600
-  other_paid: '#0891b2',       // cyan-600
-  other_unpaid: '#525252',     // neutral-600
-  bench: '#7c3aed',            // violet-600
-  holiday: '#a855f7',          // purple-500
-  weekend: '#a3a3a3',          // neutral-400
+  tracked: '#059669',        // emerald-600
+  missing: '#dc2626',        // red-600
+  vacation: '#2563eb',       // blue-600
+  sick: '#d97706',           // amber-600
+  unpaid_leave: '#525252',   // neutral-600
+  other_absence: '#7c3aed',  // violet-600
 }
 
 export type UtilizationSummary = {
@@ -54,46 +54,40 @@ export type UtilizationSummary = {
   to: string
   totalDays: number
 
-  // Bucket totals in hours, ready for the donut chart.
-  buckets: Record<UtilizationBucket, number>
-
-  // Day counts surfaced in summary cards.
-  workingDayCount: number
+  // Day counts.
+  workingDayCount: number     // weekdays minus non-working holidays
   weekendDayCount: number
   holidayDayCount: number     // non-working holidays only
   vacationDayCount: number
   sickDayCount: number
-  benchDayCount: number
+  unpaidLeaveDayCount: number
+  otherAbsenceDayCount: number
   wfhDayCount: number         // informational — never a chart slice
-  unmappedLeaveDayCount: number
 
-  // Header/KPIs.
-  expectedHours: number
-  trackedHours: number
-  overTrackedHours: number
-  untrackedWorkingHours: number
-  unmappedLeaveHours: number
+  // Bucket totals in hours, ready for the donut chart. Sum equals workingHours.
+  buckets: Record<UtilizationBucket, number>
 
-  // Total of all chart segments — equals working_hours_baseline + weekend_baseline.
-  chartTotal: number
+  // Top-line numbers.
+  workingHours: number          // chart denominator: weekdays - holidays, all in hours
+  trackedHours: number          // total logged in period (any day)
+  missingHours: number          // working_hours - absences - tracked (clamped >= 0)
+  overTrackedHours: number      // tracked beyond working_hours after absences
+  unmappedLeaveHours: number    // policies with dashboard_bucket = 'unmapped'
+  weekendHours: number          // informational only
+  holidayHours: number          // informational only
 }
 
 const ZERO_BUCKETS: Record<UtilizationBucket, number> = {
   tracked: 0,
-  over_tracked: 0,
-  untracked_working: 0,
+  missing: 0,
   vacation: 0,
   sick: 0,
-  other_paid: 0,
-  other_unpaid: 0,
-  bench: 0,
-  holiday: 0,
-  weekend: 0,
+  unpaid_leave: 0,
+  other_absence: 0,
 }
 
 /**
- * Roll a list of per-day rows into bucket totals + counts. Implements §7
- * of the plan exactly — see comments below for each branch.
+ * Roll a list of per-day rows into the working-hours-only chart model.
  */
 export function summarizeUtilization(
   days: EmployeeDay[],
@@ -101,120 +95,119 @@ export function summarizeUtilization(
   to: string,
 ): UtilizationSummary {
   const buckets: Record<UtilizationBucket, number> = { ...ZERO_BUCKETS }
+
   let workingDayCount = 0
   let weekendDayCount = 0
   let holidayDayCount = 0
   let vacationDayCount = 0
   let sickDayCount = 0
-  let benchDayCount = 0
+  let unpaidLeaveDayCount = 0
+  let otherAbsenceDayCount = 0
   let wfhDayCount = 0
-  let unmappedLeaveDayCount = 0
-  let expectedHours = 0
-  let trackedHours = 0
-  let overTrackedHours = 0
-  let untrackedWorkingHours = 0
+
+  let workingHours = 0          // sum of pattern hours over (weekday - holiday) days
+  let trackedHours = 0          // sum across ALL days (including weekend/holiday "over-tracked")
   let unmappedLeaveHours = 0
+  let weekendHours = 0
+  let holidayHours = 0
 
   for (const d of days) {
+    const base = Number(d.expected_hours_base)
     const expected = Number(d.expected_hours)
     const tracked = Number(d.tracked_hours)
-    const base = Number(d.expected_hours_base)
 
-    expectedHours += expected
     trackedHours += tracked
 
-    // Tracked is clamped to expected for chart display so the donut sums to a
-    // meaningful 100%; surplus appears as the over_tracked slice instead.
-    const trackedInChart = Math.min(tracked, expected)
-    const overTracked = Math.max(tracked - expected, 0)
-    buckets.tracked += trackedInChart
-    buckets.over_tracked += overTracked
-    overTrackedHours += overTracked
+    // ── Day type accounting (priority: weekend → holiday → leave/working) ──
 
-    // Day-type accounting. Priority mirrors v_employee_day's CASE: weekend >
-    // non-working holiday > bench > leave reduction > regular working day.
     if (d.is_weekend) {
       weekendDayCount += 1
-      buckets.weekend += WEEKEND_VIS_HOURS
-      continue  // weekend days don't contribute to working-hour buckets
+      weekendHours += tracked  // tracked time on weekends — informational
+      continue
     }
 
     if (d.is_non_working_holiday) {
       holidayDayCount += 1
-      buckets.holiday += base
+      holidayHours += tracked
       continue
     }
 
-    if (d.leave_bucket === 'bench') {
-      benchDayCount += 1
-      // Bench reduces expected to 0; chart segment uses the pattern baseline
-      // so it's visible. Tracked hours still appear via tracked/over_tracked.
-      buckets.bench += base
-      continue
-    }
-
-    // Regular working day (possibly with vacation/sick/other_paid/other_unpaid/wfh).
+    // From here: working day. Contributes to the chart denominator.
     workingDayCount += 1
+    workingHours += base
 
-    // Reduction from leave (zero if no leave or wfh/unmapped).
+    // Leave on a working day reduces expected_hours below base. The reduction
+    // is what we book into the absence buckets.
     const leaveReduction = Math.max(0, base - expected)
 
-    if (d.leave_bucket === 'vacation') {
-      buckets.vacation += leaveReduction
-      vacationDayCount += 1
-    } else if (d.leave_bucket === 'sick') {
-      buckets.sick += leaveReduction
-      sickDayCount += 1
-    } else if (d.leave_bucket === 'other_paid') {
-      buckets.other_paid += leaveReduction
-    } else if (d.leave_bucket === 'other_unpaid') {
-      buckets.other_unpaid += leaveReduction
-    } else if (d.leave_bucket === 'wfh') {
-      // WFH does not reduce expected and is not a chart slice; just count days.
-      wfhDayCount += 1
-    } else if (d.leave_bucket === 'unmapped') {
-      unmappedLeaveDayCount += 1
-      unmappedLeaveHours += leaveReduction
-      // Surfaced separately as a warning card; not summed into chart.
+    switch (d.leave_bucket) {
+      case 'vacation':
+        buckets.vacation += leaveReduction
+        vacationDayCount += 1
+        break
+      case 'sick':
+        buckets.sick += leaveReduction
+        sickDayCount += 1
+        break
+      case 'other_unpaid':
+        buckets.unpaid_leave += leaveReduction
+        unpaidLeaveDayCount += 1
+        break
+      case 'bench':
+        // Bench reduces expected to 0 for the day; the whole day is "other absence".
+        buckets.other_absence += base
+        otherAbsenceDayCount += 1
+        break
+      case 'other_paid':
+        buckets.other_absence += leaveReduction
+        otherAbsenceDayCount += 1
+        break
+      case 'unmapped':
+        unmappedLeaveHours += leaveReduction
+        // Surfaced separately; not summed into chart slices.
+        break
+      case 'wfh':
+        wfhDayCount += 1
+        // Doesn't reduce expected; not a chart slice.
+        break
+      case null:
+      default:
+        // Plain working day with no leave overlay.
+        break
     }
-
-    // The remaining "untracked working" portion of the day, only counted for
-    // the part of the day that was actually expected to be worked.
-    const untracked = Math.max(expected - tracked, 0)
-    buckets.untracked_working += untracked
-    untrackedWorkingHours += untracked
   }
 
-  const chartTotal =
-    buckets.tracked +
-    buckets.over_tracked +
-    buckets.untracked_working +
-    buckets.vacation +
-    buckets.sick +
-    buckets.other_paid +
-    buckets.other_unpaid +
-    buckets.bench +
-    buckets.holiday +
-    buckets.weekend
+  // After all working days are processed, allocate the remaining
+  // (working_hours - absences) between Tracked and Missing.
+  const totalAbsences =
+    buckets.vacation + buckets.sick + buckets.unpaid_leave + buckets.other_absence
+  const availableForWork = Math.max(0, workingHours - totalAbsences)
+  const trackedInChart = Math.min(trackedHours, availableForWork)
+  const overTrackedHours = Math.max(0, trackedHours - availableForWork)
+  const missingHours = Math.max(0, availableForWork - trackedInChart)
+
+  buckets.tracked = trackedInChart
+  buckets.missing = missingHours
 
   return {
     from,
     to,
     totalDays: days.length,
-    buckets,
     workingDayCount,
     weekendDayCount,
     holidayDayCount,
     vacationDayCount,
     sickDayCount,
-    benchDayCount,
+    unpaidLeaveDayCount,
+    otherAbsenceDayCount,
     wfhDayCount,
-    unmappedLeaveDayCount,
-    expectedHours,
+    buckets,
+    workingHours,
     trackedHours,
+    missingHours,
     overTrackedHours,
-    untrackedWorkingHours,
     unmappedLeaveHours,
-    chartTotal,
+    weekendHours,
+    holidayHours,
   }
 }

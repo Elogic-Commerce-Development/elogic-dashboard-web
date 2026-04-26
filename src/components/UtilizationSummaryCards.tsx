@@ -6,7 +6,7 @@ type Card = {
   label: string
   primary: string
   secondary?: string
-  tone?: 'good' | 'bad' | 'warn' | 'info' | 'neutral' | 'alert'
+  tone?: 'good' | 'bad' | 'warn' | 'info' | 'neutral' | 'alert' | 'emphasis'
 }
 
 const TONE_STYLES: Record<NonNullable<Card['tone']>, string> = {
@@ -16,29 +16,30 @@ const TONE_STYLES: Record<NonNullable<Card['tone']>, string> = {
   info: 'border-blue-200 bg-blue-50',
   alert: 'border-pink-200 bg-pink-50',
   neutral: 'border-neutral-200 bg-white',
+  emphasis: 'border-neutral-300 bg-neutral-100',
 }
 
 export function UtilizationSummaryCards({ summary }: Props) {
   const cards: Card[] = [
     {
+      label: 'Working hours',
+      primary: `${summary.workingHours.toFixed(1)}h`,
+      secondary: `${summary.workingDayCount} days · weekends + ${summary.holidayDayCount} holiday(s) excluded`,
+      tone: 'emphasis',
+    },
+    {
       label: 'Tracked',
       primary: `${summary.trackedHours.toFixed(1)}h`,
-      secondary: summary.expectedHours > 0
-        ? `${Math.round((summary.trackedHours / summary.expectedHours) * 100)}% of expected`
+      secondary: summary.workingHours > 0
+        ? `${Math.round((summary.trackedHours / summary.workingHours) * 100)}% of working hours`
         : '—',
       tone: 'good',
     },
     {
-      label: 'Expected',
-      primary: `${summary.expectedHours.toFixed(1)}h`,
-      secondary: `${summary.workingDayCount} working days`,
-      tone: 'neutral',
-    },
-    {
-      label: 'Untracked working',
-      primary: `${summary.untrackedWorkingHours.toFixed(1)}h`,
-      secondary: summary.untrackedWorkingHours > 0 ? 'gap vs expected' : 'no gap',
-      tone: summary.untrackedWorkingHours > 0 ? 'bad' : 'neutral',
+      label: 'Missing',
+      primary: `${summary.missingHours.toFixed(1)}h`,
+      secondary: summary.missingHours > 0 ? 'expected but not logged' : 'nothing missing',
+      tone: summary.missingHours > 0 ? 'bad' : 'neutral',
     },
     {
       label: 'Vacation',
@@ -53,16 +54,16 @@ export function UtilizationSummaryCards({ summary }: Props) {
       tone: 'warn',
     },
     {
-      label: 'Public holidays',
-      primary: `${summary.buckets.holiday.toFixed(1)}h`,
-      secondary: `${summary.holidayDayCount} days`,
-      tone: 'info',
+      label: 'Unpaid leave',
+      primary: `${summary.buckets.unpaid_leave.toFixed(1)}h`,
+      secondary: `${summary.unpaidLeaveDayCount} days`,
+      tone: 'neutral',
     },
     {
-      label: 'Weekends',
-      primary: `${summary.buckets.weekend.toFixed(1)}h`,
-      secondary: `${summary.weekendDayCount} days`,
-      tone: 'neutral',
+      label: 'Other absence',
+      primary: `${summary.buckets.other_absence.toFixed(1)}h`,
+      secondary: `${summary.otherAbsenceDayCount} days · bench / other paid`,
+      tone: summary.buckets.other_absence > 0 ? 'info' : 'neutral',
     },
     {
       label: 'WFH (informational)',
@@ -72,27 +73,19 @@ export function UtilizationSummaryCards({ summary }: Props) {
     },
   ]
 
-  if (summary.benchDayCount > 0 || summary.buckets.bench > 0) {
-    cards.push({
-      label: 'Bench',
-      primary: `${summary.buckets.bench.toFixed(1)}h`,
-      secondary: `${summary.benchDayCount} days`,
-      tone: 'info',
-    })
-  }
   if (summary.overTrackedHours > 0) {
     cards.push({
       label: 'Tracked above plan',
       primary: `${summary.overTrackedHours.toFixed(1)}h`,
-      secondary: 'logged beyond expected',
+      secondary: 'logged beyond expected (e.g. weekend / holiday work)',
       tone: 'alert',
     })
   }
-  if (summary.unmappedLeaveHours > 0 || summary.unmappedLeaveDayCount > 0) {
+  if (summary.unmappedLeaveHours > 0) {
     cards.push({
       label: 'Unmapped leave',
       primary: `${summary.unmappedLeaveHours.toFixed(1)}h`,
-      secondary: `${summary.unmappedLeaveDayCount} days · needs mapping`,
+      secondary: 'policy needs operator mapping',
       tone: 'warn',
     })
   }

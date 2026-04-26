@@ -26,6 +26,14 @@ export function acProjectUrl(projectId: number): string {
   return `https://next-app.activecollab.com/${AC_ORG_ID}/projects/${projectId}`
 }
 
+// PeopleForce employee profile. If your tenant uses a subdomain (e.g.
+// elogic.peopleforce.io) instead of app.peopleforce.io, edit this constant.
+const PF_BASE_URL = 'https://app.peopleforce.io'
+
+export function peopleForceEmployeeUrl(employeeId: number): string {
+  return `${PF_BASE_URL}/employees/${employeeId}`
+}
+
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return '—'
   const d = new Date(value)
