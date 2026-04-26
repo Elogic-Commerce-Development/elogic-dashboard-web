@@ -3,18 +3,14 @@ import { BUCKET_COLORS, BUCKET_LABELS, type UtilizationBucket, type UtilizationS
 
 type Props = { summary: UtilizationSummary }
 
-// Order matters for legend readability — work-related slices first, then leave, then idle.
+// Order matters for legend readability: tracked first, then absences, then missing.
 const SLICE_ORDER: UtilizationBucket[] = [
   'tracked',
-  'over_tracked',
-  'untracked_working',
   'vacation',
   'sick',
-  'other_paid',
-  'other_unpaid',
-  'bench',
-  'holiday',
-  'weekend',
+  'unpaid_leave',
+  'other_absence',
+  'missing',
 ]
 
 export function UtilizationDonut({ summary }: Props) {
@@ -30,24 +26,27 @@ export function UtilizationDonut({ summary }: Props) {
     }))
     .filter((s) => s.value > 0)
 
-  if (summary.chartTotal === 0) {
+  if (summary.workingHours === 0) {
     return (
       <div className="flex h-full min-h-[300px] flex-col items-center justify-center rounded-lg border border-neutral-200 bg-white p-6 text-sm text-neutral-500 shadow-sm">
-        No data for this period.
+        No working days in this period.
       </div>
     )
   }
 
-  const trackedPct = summary.expectedHours > 0
-    ? Math.round((summary.trackedHours / summary.expectedHours) * 100)
-    : 0
+  const trackedPct = Math.round((summary.trackedHours / summary.workingHours) * 100)
 
   return (
     <div className="rounded-lg border border-neutral-200 bg-white shadow-sm">
-      <div className="border-b border-neutral-100 px-4 py-3">
-        <h3 className="text-sm font-semibold text-neutral-900">Time utilization</h3>
-        <p className="text-xs text-neutral-500">
-          {summary.from} → {summary.to} · {summary.totalDays} days
+      <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-neutral-100 px-4 py-3">
+        <div>
+          <h3 className="text-sm font-semibold text-neutral-900">Working time</h3>
+          <p className="text-xs text-neutral-500">
+            {summary.from} → {summary.to} · {summary.workingDayCount} working days · {summary.workingHours.toFixed(0)}h
+          </p>
+        </div>
+        <p className="text-xs text-neutral-400">
+          weekends + holidays excluded from this chart
         </p>
       </div>
       <div className="grid gap-4 p-4 sm:grid-cols-2">
@@ -78,14 +77,16 @@ export function UtilizationDonut({ summary }: Props) {
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
             <div className="text-2xl font-semibold text-neutral-900">{trackedPct}%</div>
             <div className="text-xs text-neutral-500">
-              {summary.trackedHours.toFixed(0)}h / {summary.expectedHours.toFixed(0)}h
+              {summary.trackedHours.toFixed(0)}h / {summary.workingHours.toFixed(0)}h
             </div>
-            <div className="text-[10px] uppercase tracking-wider text-neutral-400">Tracked / Expected</div>
+            <div className="text-[10px] uppercase tracking-wider text-neutral-400">
+              Tracked / Working
+            </div>
           </div>
         </div>
         <ul className="grid grid-cols-1 gap-1 self-center text-xs">
           {data.map((s) => {
-            const pct = summary.chartTotal > 0 ? Math.round((s.value / summary.chartTotal) * 100) : 0
+            const pct = summary.workingHours > 0 ? Math.round((s.value / summary.workingHours) * 100) : 0
             return (
               <li key={s.bucket} className="flex items-center justify-between gap-2 rounded px-1 py-0.5 hover:bg-neutral-50">
                 <span className="flex items-center gap-2">

@@ -14,7 +14,7 @@ import {
   type EmployeeDay,
   type UserDetail,
 } from '@/lib/queries'
-import { formatHours, formatRatio, acTaskUrl } from '@/lib/format'
+import { formatHours, formatRatio, acTaskUrl, peopleForceEmployeeUrl } from '@/lib/format'
 import { periodRange, type PeriodPreset } from '@/lib/period'
 import { summarizeUtilization } from '@/lib/utilization'
 
@@ -177,9 +177,15 @@ export function ContributorDetailPage() {
           </span>
         )}
         {user?.peopleforce_id != null && (
-          <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-blue-700">
-            PF #{user.peopleforce_id}
-          </span>
+          <a
+            href={peopleForceEmployeeUrl(user.peopleforce_id)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-blue-700 hover:bg-blue-100 hover:underline"
+            title="Open profile in PeopleForce"
+          >
+            PF #{user.peopleforce_id} ↗
+          </a>
         )}
       </div>
 
