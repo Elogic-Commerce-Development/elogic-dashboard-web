@@ -362,54 +362,60 @@ export async function fetchUserDetail(userId: number): Promise<UserDetail | null
   return (data as UserDetail | null) ?? null
 }
 
-export type TaskTimeRecord = {
+export type TaskTimeEntry = {
+  id: number
   user_id: number
   user_name: string
   job_type_id: number | null
   job_type_name: string | null
   hours: number
+  record_date: string             // ISO date — when the work was done
+  created_on: string              // ISO timestamp — when the entry was added in AC
+  billable_status: number | null  // AC enum: 0=not billable, 1=billable, 2=already billed, 3=pending payment
+  summary: string | null          // free-text description on the entry
 }
 
-type RawTaskTimeRecord = {
+type RawTaskTimeEntry = {
+  id: number
   user_id: number
   job_type_id: number | null
   value_hours: number
+  record_date: string
+  created_on: string
+  billable_status: number | null
+  summary: string | null
   user: { id: number; display_name: string } | null
   job_type: { id: number; name: string } | null
 }
 
 /**
- * Time records for a single task, joined to user and job_type, grouped
- * client-side into one row per (user, job_type) pair. Used by the task
- * detail page's stacked breakdown chart.
+ * Raw time-record entries for a single task, joined to user and job_type
+ * via PostgREST embed. Returned in record_date desc order so the most
+ * recent work is at the top.
  */
-export async function fetchTaskTimeRecords(taskId: number): Promise<TaskTimeRecord[]> {
+export async function fetchTaskTimeRecordEntries(taskId: number): Promise<TaskTimeEntry[]> {
   const { data, error } = await supabase
     .from('time_records')
-    .select('user_id, job_type_id, value_hours, user:users(id,display_name), job_type:job_types(id,name)')
+    .select('id, user_id, job_type_id, value_hours, record_date, created_on, billable_status, summary, user:users(id,display_name), job_type:job_types(id,name)')
     .eq('task_id', taskId)
     .eq('is_trashed', false)
-    .limit(5000)
+    .order('record_date', { ascending: false })
+    .order('created_on', { ascending: false })
+    .limit(2000)
   if (error) throw error
 
-  const grouped = new Map<string, TaskTimeRecord>()
-  for (const r of (data ?? []) as unknown as RawTaskTimeRecord[]) {
-    const key = `${r.user_id}__${r.job_type_id ?? 'none'}`
-    const existing = grouped.get(key)
-    const hours = Number(r.value_hours)
-    if (existing) {
-      existing.hours += hours
-    } else {
-      grouped.set(key, {
-        user_id: r.user_id,
-        user_name: r.user?.display_name ?? `User #${r.user_id}`,
-        job_type_id: r.job_type_id,
-        job_type_name: r.job_type?.name ?? null,
-        hours,
-      })
-    }
-  }
-  return Array.from(grouped.values()).sort((a, b) => b.hours - a.hours)
+  return ((data ?? []) as unknown as RawTaskTimeEntry[]).map((r) => ({
+    id: r.id,
+    user_id: r.user_id,
+    user_name: r.user?.display_name ?? `User #${r.user_id}`,
+    job_type_id: r.job_type_id,
+    job_type_name: r.job_type?.name ?? null,
+    hours: Number(r.value_hours),
+    record_date: r.record_date,
+    created_on: r.created_on,
+    billable_status: r.billable_status,
+    summary: r.summary,
+  }))
 }
 
 /**

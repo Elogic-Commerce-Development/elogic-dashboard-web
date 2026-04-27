@@ -1,22 +1,24 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from '@tanstack/react-router'
 import { supabase } from '@/lib/supabase'
 import {
   fetchTaskContributors,
-  fetchTaskTimeRecords,
+  fetchTaskTimeRecordEntries,
   type TaskActualVsEstimate,
   type TaskContributor,
-  type TaskTimeRecord,
+  type TaskTimeEntry,
 } from '@/lib/queries'
 import { formatHours, formatRatio, acTaskUrl, acProjectUrl } from '@/lib/format'
+import { buildEmployeeColorMap } from '@/lib/contributorColors'
 import { TaskTimeBreakdown } from '@/components/TaskTimeBreakdown'
+import { TaskTimeEntries } from '@/components/TaskTimeEntries'
 
 export function TaskDetailPage() {
   const { taskId } = useParams({ from: '/tasks/$taskId' })
   const tid = Number(taskId)
   const [task, setTask] = useState<TaskActualVsEstimate | null>(null)
   const [contributors, setContributors] = useState<TaskContributor[]>([])
-  const [records, setRecords] = useState<TaskTimeRecord[]>([])
+  const [entries, setEntries] = useState<TaskTimeEntry[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -29,12 +31,12 @@ export function TaskDetailPage() {
       .eq('task_id', tid)
       .maybeSingle()
 
-    Promise.all([loadTask, fetchTaskContributors(tid), fetchTaskTimeRecords(tid)])
-      .then(([tRes, contribs, recs]) => {
+    Promise.all([loadTask, fetchTaskContributors(tid), fetchTaskTimeRecordEntries(tid)])
+      .then(([tRes, contribs, ents]) => {
         if (cancelled) return
         if (tRes.data) setTask(tRes.data as TaskActualVsEstimate)
         setContributors(contribs)
-        setRecords(recs)
+        setEntries(ents)
       })
       .catch(() => {})
       .finally(() => {
@@ -44,6 +46,13 @@ export function TaskDetailPage() {
       cancelled = true
     }
   }, [tid])
+
+  // Stable per-task colour map shared by the chart and the entries table
+  // so the same person reads as the same shade in both places.
+  const employeeColors = useMemo(
+    () => buildEmployeeColorMap(entries.map((e) => ({ user_id: e.user_id, hours: e.hours }))),
+    [entries],
+  )
 
   if (loading) {
     return <div className="py-12 text-center text-sm text-neutral-400">Loading task...</div>
@@ -116,7 +125,8 @@ export function TaskDetailPage() {
       <TaskTimeBreakdown
         estimate={task.estimate_hours}
         actual={Number(task.actual_hours)}
-        records={records}
+        entries={entries}
+        employeeColors={employeeColors}
       />
 
       {task.estimate_hours == null && Number(task.actual_hours) > 0 && (
@@ -141,26 +151,38 @@ export function TaskDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {contributors.map((c) => (
-                  <tr key={c.contributor_id} className="border-t border-neutral-100 hover:bg-neutral-50">
-                    <td className="px-4 py-2">
-                      <Link
-                        to="/people/$userId"
-                        params={{ userId: String(c.contributor_id) }}
-                        className="text-blue-600 hover:text-blue-800 hover:underline"
-                      >
-                        {c.contributor_name}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-2 tabular-nums">{formatHours(c.hours)}</td>
-                    <td className="px-4 py-2 tabular-nums">{formatRatio(c.share)}</td>
-                  </tr>
-                ))}
+                {contributors.map((c) => {
+                  const personColor = employeeColors.get(c.contributor_id) ?? '#475569'
+                  return (
+                    <tr key={c.contributor_id} className="border-t border-neutral-100 hover:bg-neutral-50">
+                      <td className="px-4 py-2">
+                        <span className="inline-flex items-center gap-2">
+                          <span
+                            aria-hidden
+                            className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm"
+                            style={{ backgroundColor: personColor }}
+                          />
+                          <Link
+                            to="/people/$userId"
+                            params={{ userId: String(c.contributor_id) }}
+                            className="text-blue-600 hover:text-blue-800 hover:underline"
+                          >
+                            {c.contributor_name}
+                          </Link>
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 tabular-nums">{formatHours(c.hours)}</td>
+                      <td className="px-4 py-2 tabular-nums">{formatRatio(c.share)}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
         </section>
       )}
+
+      <TaskTimeEntries entries={entries} employeeColors={employeeColors} />
     </div>
   )
 }
