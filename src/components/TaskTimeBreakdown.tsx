@@ -1,13 +1,16 @@
 import { useMemo } from 'react'
 import { Link } from '@tanstack/react-router'
 import { jobTypeColor, NO_JOB_TYPE_LABEL } from '@/lib/jobTypes'
-import type { TaskTimeRecord } from '@/lib/queries'
+import { buildEmployeeColorMap } from '@/lib/contributorColors'
+import type { TaskTimeEntry } from '@/lib/queries'
 import { formatHours } from '@/lib/format'
 
 type Props = {
   estimate: number | null
   actual: number
-  records: TaskTimeRecord[]
+  entries: TaskTimeEntry[]
+  /** Optional override; if not provided we compute the default per-task map. */
+  employeeColors?: Map<number, string>
 }
 
 type Slice = {
@@ -15,60 +18,72 @@ type Slice = {
   label: string
   hours: number
   color: string
-  /** Optional secondary line under the slice (e.g. "16h • 80%") */
   href?: { pathname: '/people/$userId'; userId: string }
 }
 
 /**
- * Sequential slate shades for the employee bar — chosen so the second
- * visualisation reads as "the same hours, sliced differently" rather than
- * competing with the categorical job-type colours above it.
+ * Bill status counts as "billable" if the AC enum is 1 (billable),
+ * 2 (already billed), or 3 (pending payment). 0 and null are not billable.
  */
-const EMPLOYEE_SHADES = ['#1e293b', '#334155', '#475569', '#64748b', '#94a3b8', '#cbd5e1']
+function isBillable(status: number | null): boolean {
+  return status != null && status !== 0
+}
 
-export function TaskTimeBreakdown({ estimate, actual, records }: Props) {
+export function TaskTimeBreakdown({ estimate, actual, entries, employeeColors }: Props) {
   const total = actual
 
-  const { byJobType, byEmployee } = useMemo(() => {
-    const jt = new Map<string, Slice>()
-    const emp = new Map<number, Slice & { hours: number }>()
+  const empColorMap = useMemo(
+    () => employeeColors ?? buildEmployeeColorMap(entries.map((e) => ({ user_id: e.user_id, hours: e.hours }))),
+    [employeeColors, entries],
+  )
 
-    for (const r of records) {
-      const jtKey = r.job_type_name ?? '__none__'
-      const jtLabel = r.job_type_name ?? NO_JOB_TYPE_LABEL
+  const { byJobType, byEmployee, billableHours, notBillableHours } = useMemo(() => {
+    const jt = new Map<string, Slice>()
+    const emp = new Map<number, Slice>()
+    let billable = 0
+    let notBillable = 0
+
+    for (const e of entries) {
+      if (isBillable(e.billable_status)) billable += e.hours
+      else notBillable += e.hours
+
+      // Job-type bucket
+      const jtKey = e.job_type_name ?? '__none__'
+      const jtLabel = e.job_type_name ?? NO_JOB_TYPE_LABEL
       const jtExisting = jt.get(jtKey)
       if (jtExisting) {
-        jtExisting.hours += r.hours
+        jtExisting.hours += e.hours
       } else {
         jt.set(jtKey, {
           id: jtKey,
           label: jtLabel,
-          hours: r.hours,
-          color: jobTypeColor(r.job_type_name),
+          hours: e.hours,
+          color: jobTypeColor(e.job_type_name),
         })
       }
 
-      const empExisting = emp.get(r.user_id)
+      // Employee bucket
+      const empExisting = emp.get(e.user_id)
       if (empExisting) {
-        empExisting.hours += r.hours
+        empExisting.hours += e.hours
       } else {
-        emp.set(r.user_id, {
-          id: String(r.user_id),
-          label: r.user_name,
-          hours: r.hours,
-          color: '#475569', // assigned below in order
-          href: { pathname: '/people/$userId', userId: String(r.user_id) },
+        emp.set(e.user_id, {
+          id: String(e.user_id),
+          label: e.user_name,
+          hours: e.hours,
+          color: empColorMap.get(e.user_id) ?? '#475569',
+          href: { pathname: '/people/$userId', userId: String(e.user_id) },
         })
       }
     }
 
-    const jobSlices = Array.from(jt.values()).sort((a, b) => b.hours - a.hours)
-    const empSlices = Array.from(emp.values())
-      .sort((a, b) => b.hours - a.hours)
-      .map((s, i) => ({ ...s, color: EMPLOYEE_SHADES[i % EMPLOYEE_SHADES.length] }))
-
-    return { byJobType: jobSlices, byEmployee: empSlices }
-  }, [records])
+    return {
+      byJobType: Array.from(jt.values()).sort((a, b) => b.hours - a.hours),
+      byEmployee: Array.from(emp.values()).sort((a, b) => b.hours - a.hours),
+      billableHours: billable,
+      notBillableHours: notBillable,
+    }
+  }, [entries, empColorMap])
 
   // Bar geometry. Track width = max(actual, estimate). The filled portion is
   // `actual`; if there's slack between actual and estimate, it shows as a
@@ -89,6 +104,15 @@ export function TaskTimeBreakdown({ estimate, actual, records }: Props) {
 
   return (
     <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm">
+      {/* Billable summary strip */}
+      {total > 0 && (
+        <BillableStrip
+          billable={billableHours}
+          notBillable={notBillableHours}
+          entryCount={entries.length}
+        />
+      )}
+
       {/* Headline numbers */}
       <div className="grid grid-cols-3 divide-x divide-neutral-200 border-b border-neutral-200">
         <HeadlineStat label="Spent" value={formatHours(actual)} />
@@ -134,6 +158,48 @@ export function TaskTimeBreakdown({ estimate, actual, records }: Props) {
   )
 }
 
+function BillableStrip({
+  billable,
+  notBillable,
+  entryCount,
+}: {
+  billable: number
+  notBillable: number
+  entryCount: number
+}) {
+  const total = billable + notBillable
+  const billablePct = total > 0 ? (billable / total) * 100 : 0
+  return (
+    <div className="border-b border-neutral-200 bg-neutral-50 px-4 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="flex items-center gap-4">
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-emerald-600" />
+            <span className="text-neutral-600">Billable</span>
+            <span className="font-semibold tabular-nums text-neutral-900">{formatHours(billable)}</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-neutral-400" />
+            <span className="text-neutral-600">Not billable</span>
+            <span className="font-semibold tabular-nums text-neutral-900">{formatHours(notBillable)}</span>
+          </span>
+        </div>
+        <span className="text-neutral-400 tabular-nums">
+          {entryCount} {entryCount === 1 ? 'entry' : 'entries'}
+        </span>
+      </div>
+      {/* Inline mini-bar showing billable share */}
+      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-neutral-200">
+        <div
+          className="h-full bg-emerald-600 transition-all"
+          style={{ width: `${billablePct}%` }}
+          title={`${Math.round(billablePct)}% billable`}
+        />
+      </div>
+    </div>
+  )
+}
+
 function HeadlineStat({
   label,
   value,
@@ -172,8 +238,6 @@ function Bar({
   estimateMarkerPct: number | null
   isOverrun: boolean
 }) {
-  // Each slice's width as a fraction of the FILLED portion (actual hours).
-  // The filled portion itself is `filledPct` of the bar track width.
   return (
     <div className="space-y-1.5">
       <div className="flex items-baseline justify-between text-xs text-neutral-500">
@@ -189,9 +253,9 @@ function Bar({
             style={{ width: `${filledPct}%` }}
           >
             {slices.map((s) => {
-              const widthPct = barTotal > 0 ? (s.hours / barTotal) * (100 / Math.max(filledPct, 0.0001)) * 100 : 0
-              // The above expression normalises so each slice's width is its
-              // share of the FILLED portion (which itself is filledPct of the track).
+              const widthPct = barTotal > 0
+                ? (s.hours / barTotal) * (100 / Math.max(filledPct, 0.0001)) * 100
+                : 0
               return (
                 <div
                   key={s.id}
@@ -203,8 +267,7 @@ function Bar({
             })}
           </div>
 
-          {/* Overrun stripe overlay — covers the portion of the filled bar
-              that lies past the estimate marker. Only shown when actual > estimate. */}
+          {/* Overrun stripe overlay */}
           {isOverrun && estimateMarkerPct !== null && (
             <div
               className="pointer-events-none absolute inset-y-0"
