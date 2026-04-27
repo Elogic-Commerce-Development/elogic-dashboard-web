@@ -21,6 +21,13 @@ export function AppLayout() {
   const routerState = useRouterState()
   const pathname = routerState.location.pathname
   const isDashboard = pathname === '/'
+  // /people, /projects, and the deep /tasks/<id> page are all scoped to a
+  // single entity, so the global From/To + project + user multi-select adds
+  // no value there. The list pages keep the FilterBar.
+  const isContributorDetail = /^\/people\/[^/]+/.test(pathname)
+  const isProjectDetail = /^\/projects\/[^/]+/.test(pathname)
+  const isTaskDetail = /^\/tasks\/[^/]+/.test(pathname)
+  const hideFilterBar = isContributorDetail || isProjectDetail || isTaskDetail
 
   useEffect(() => {
     fetchOutsourcingProjectIds()
@@ -74,12 +81,14 @@ export function AppLayout() {
 
         <main className="mx-auto max-w-7xl space-y-5 px-6 py-6">
           <TrackingSinceBanner />
-          <FilterBar
-            value={filters}
-            onChange={setFilters}
-            hideDateRange={isDashboard}
-            scopedProjectIds={isDashboard ? outsourcingProjectIds : undefined}
-          />
+          {!hideFilterBar && (
+            <FilterBar
+              value={filters}
+              onChange={setFilters}
+              hideDateRange={isDashboard}
+              scopedProjectIds={isDashboard ? outsourcingProjectIds : undefined}
+            />
+          )}
           <Outlet />
         </main>
       </div>

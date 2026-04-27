@@ -37,7 +37,20 @@ const taskColumns: ColumnDef<TaskActualVsEstimate>[] = [
   {
     accessorKey: 'assignee_name',
     header: 'Assignee',
-    cell: ({ getValue }) => (getValue() as string | null) ?? '—',
+    cell: ({ row }) => {
+      const id = row.original.assignee_id
+      const name = row.original.assignee_name
+      if (id == null || name == null) return '—'
+      return (
+        <Link
+          to="/people/$userId"
+          params={{ userId: String(id) }}
+          className="text-blue-600 hover:text-blue-800 hover:underline"
+        >
+          {name}
+        </Link>
+      )
+    },
   },
   {
     accessorKey: 'estimate_hours',

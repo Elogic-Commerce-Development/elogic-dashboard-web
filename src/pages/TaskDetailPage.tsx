@@ -1,14 +1,22 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from '@tanstack/react-router'
 import { supabase } from '@/lib/supabase'
-import { fetchTaskContributors, type TaskActualVsEstimate, type TaskContributor } from '@/lib/queries'
+import {
+  fetchTaskContributors,
+  fetchTaskTimeRecords,
+  type TaskActualVsEstimate,
+  type TaskContributor,
+  type TaskTimeRecord,
+} from '@/lib/queries'
 import { formatHours, formatRatio, acTaskUrl, acProjectUrl } from '@/lib/format'
+import { TaskTimeBreakdown } from '@/components/TaskTimeBreakdown'
 
 export function TaskDetailPage() {
   const { taskId } = useParams({ from: '/tasks/$taskId' })
   const tid = Number(taskId)
   const [task, setTask] = useState<TaskActualVsEstimate | null>(null)
   const [contributors, setContributors] = useState<TaskContributor[]>([])
+  const [records, setRecords] = useState<TaskTimeRecord[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -21,11 +29,12 @@ export function TaskDetailPage() {
       .eq('task_id', tid)
       .maybeSingle()
 
-    Promise.all([loadTask, fetchTaskContributors(tid)])
-      .then(([tRes, contribs]) => {
+    Promise.all([loadTask, fetchTaskContributors(tid), fetchTaskTimeRecords(tid)])
+      .then(([tRes, contribs, recs]) => {
         if (cancelled) return
         if (tRes.data) setTask(tRes.data as TaskActualVsEstimate)
         setContributors(contribs)
+        setRecords(recs)
       })
       .catch(() => {})
       .finally(() => {
@@ -43,17 +52,6 @@ export function TaskDetailPage() {
   if (!task) {
     return <div className="py-12 text-center text-sm text-neutral-400">Task not found.</div>
   }
-
-  const estimate = task.estimate_hours
-  const actual = task.actual_hours
-  const overrun = estimate != null ? actual - estimate : null
-  const ratio = task.ratio
-
-  // Bar width as percentage of max(estimate, actual)
-  const barMax = Math.max(estimate ?? 0, actual)
-  const estimatePct = barMax > 0 && estimate != null ? (estimate / barMax) * 100 : 0
-  const actualPct = barMax > 0 ? (actual / barMax) * 100 : 0
-  const isOverrun = overrun != null && overrun > 0
 
   return (
     <div className="space-y-6">
@@ -91,61 +89,43 @@ export function TaskDetailPage() {
           >
             <ExternalLinkIcon />
           </a>
-          {task.assignee_name && (
+          {task.assignee_name && task.assignee_id && (
             <>
               <span className="text-neutral-300">|</span>
-              <span>Assignee: {task.assignee_name}</span>
+              <span>
+                Assignee:{' '}
+                <Link
+                  to="/people/$userId"
+                  params={{ userId: String(task.assignee_id) }}
+                  className="text-blue-600 hover:text-blue-800 hover:underline"
+                >
+                  {task.assignee_name}
+                </Link>
+              </span>
+            </>
+          )}
+          {task.ratio != null && (
+            <>
+              <span className="text-neutral-300">|</span>
+              <span>Ratio: <span className="tabular-nums">{formatRatio(task.ratio)}</span></span>
             </>
           )}
         </div>
       </div>
 
-      {/* Estimate vs actual bar */}
-      {estimate != null && (
-        <div className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
-          <div className="mb-2 flex items-center justify-between text-xs text-neutral-500">
-            <span>Estimate: {formatHours(estimate)}</span>
-            <span>Actual: {formatHours(actual)}</span>
-          </div>
-          <div className="relative h-6 overflow-hidden rounded-full bg-neutral-100">
-            <div
-              className={`absolute inset-y-0 left-0 rounded-full ${isOverrun ? 'bg-red-400' : 'bg-emerald-400'}`}
-              style={{ width: `${actualPct}%` }}
-            />
-            {estimatePct < 100 && (
-              <div
-                className="absolute inset-y-0 w-0.5 bg-neutral-800"
-                style={{ left: `${estimatePct}%` }}
-                title={`Estimate: ${formatHours(estimate)}`}
-              />
-            )}
-          </div>
-          <div className="mt-2 flex gap-4 text-xs">
-            <span className={isOverrun ? 'font-medium text-red-600' : 'text-emerald-600'}>
-              {isOverrun ? `+${formatHours(overrun)} overrun` : overrun != null ? `${formatHours(Math.abs(overrun))} under budget` : ''}
-            </span>
-            {ratio != null && (
-              <span className="text-neutral-500">Ratio: {formatRatio(ratio)}</span>
-            )}
-          </div>
-        </div>
-      )}
+      <TaskTimeBreakdown
+        estimate={task.estimate_hours}
+        actual={Number(task.actual_hours)}
+        records={records}
+      />
 
-      {estimate == null && actual > 0 && (
+      {task.estimate_hours == null && Number(task.actual_hours) > 0 && (
         <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          This task has no estimate. {formatHours(actual)} tracked so far.
+          This task has no estimate. {formatHours(Number(task.actual_hours))} tracked so far.
         </div>
       )}
 
-      {/* KPI cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <MiniCard label="Estimate" value={formatHours(estimate)} />
-        <MiniCard label="Actual" value={formatHours(actual)} />
-        <MiniCard label="Overrun" value={overrun != null ? formatHours(overrun) : '—'} />
-        <MiniCard label="Ratio" value={formatRatio(ratio)} />
-      </div>
-
-      {/* Contributor breakdown */}
+      {/* Contributor table — kept for the per-person Share% column */}
       {contributors.length > 0 && (
         <section>
           <h3 className="mb-2 text-sm font-semibold text-neutral-900">
@@ -172,8 +152,8 @@ export function TaskDetailPage() {
                         {c.contributor_name}
                       </Link>
                     </td>
-                    <td className="px-4 py-2">{formatHours(c.hours)}</td>
-                    <td className="px-4 py-2">{formatRatio(c.share)}</td>
+                    <td className="px-4 py-2 tabular-nums">{formatHours(c.hours)}</td>
+                    <td className="px-4 py-2 tabular-nums">{formatRatio(c.share)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -181,15 +161,6 @@ export function TaskDetailPage() {
           </div>
         </section>
       )}
-    </div>
-  )
-}
-
-function MiniCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2 shadow-sm">
-      <div className="text-lg font-bold text-neutral-900">{value}</div>
-      <div className="text-xs text-neutral-500">{label}</div>
     </div>
   )
 }

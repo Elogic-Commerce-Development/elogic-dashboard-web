@@ -362,6 +362,56 @@ export async function fetchUserDetail(userId: number): Promise<UserDetail | null
   return (data as UserDetail | null) ?? null
 }
 
+export type TaskTimeRecord = {
+  user_id: number
+  user_name: string
+  job_type_id: number | null
+  job_type_name: string | null
+  hours: number
+}
+
+type RawTaskTimeRecord = {
+  user_id: number
+  job_type_id: number | null
+  value_hours: number
+  user: { id: number; display_name: string } | null
+  job_type: { id: number; name: string } | null
+}
+
+/**
+ * Time records for a single task, joined to user and job_type, grouped
+ * client-side into one row per (user, job_type) pair. Used by the task
+ * detail page's stacked breakdown chart.
+ */
+export async function fetchTaskTimeRecords(taskId: number): Promise<TaskTimeRecord[]> {
+  const { data, error } = await supabase
+    .from('time_records')
+    .select('user_id, job_type_id, value_hours, user:users(id,display_name), job_type:job_types(id,name)')
+    .eq('task_id', taskId)
+    .eq('is_trashed', false)
+    .limit(5000)
+  if (error) throw error
+
+  const grouped = new Map<string, TaskTimeRecord>()
+  for (const r of (data ?? []) as unknown as RawTaskTimeRecord[]) {
+    const key = `${r.user_id}__${r.job_type_id ?? 'none'}`
+    const existing = grouped.get(key)
+    const hours = Number(r.value_hours)
+    if (existing) {
+      existing.hours += hours
+    } else {
+      grouped.set(key, {
+        user_id: r.user_id,
+        user_name: r.user?.display_name ?? `User #${r.user_id}`,
+        job_type_id: r.job_type_id,
+        job_type_name: r.job_type?.name ?? null,
+        hours,
+      })
+    }
+  }
+  return Array.from(grouped.values()).sort((a, b) => b.hours - a.hours)
+}
+
 /**
  * Per-(user, day) rows from v_employee_day filtered to the given range.
  * Returns [] if the user has no PF link (the view INNER JOINs to pf_employees
