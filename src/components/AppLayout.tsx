@@ -21,12 +21,13 @@ export function AppLayout() {
   const routerState = useRouterState()
   const pathname = routerState.location.pathname
   const isDashboard = pathname === '/'
-  // /people and /projects (the lists) keep the FilterBar; the detail pages
-  // (/people/<id>, /projects/<id>) are scoped to a single entity so the
-  // global From/To + project + user multi-select adds no value there.
+  // /people, /projects, and the deep /tasks/<id> page are all scoped to a
+  // single entity, so the global From/To + project + user multi-select adds
+  // no value there. The list pages keep the FilterBar.
   const isContributorDetail = /^\/people\/[^/]+/.test(pathname)
   const isProjectDetail = /^\/projects\/[^/]+/.test(pathname)
-  const hideFilterBar = isContributorDetail || isProjectDetail
+  const isTaskDetail = /^\/tasks\/[^/]+/.test(pathname)
+  const hideFilterBar = isContributorDetail || isProjectDetail || isTaskDetail
 
   useEffect(() => {
     fetchOutsourcingProjectIds()
