@@ -21,6 +21,10 @@ export function AppLayout() {
   const routerState = useRouterState()
   const pathname = routerState.location.pathname
   const isDashboard = pathname === '/'
+  // /people is the contributor list (FilterBar useful); /people/<id> is the
+  // employee detail page which has its own period switcher and is scoped to
+  // a single user — global FilterBar is irrelevant there.
+  const isContributorDetail = /^\/people\/[^/]+/.test(pathname)
 
   useEffect(() => {
     fetchOutsourcingProjectIds()
@@ -74,12 +78,14 @@ export function AppLayout() {
 
         <main className="mx-auto max-w-7xl space-y-5 px-6 py-6">
           <TrackingSinceBanner />
-          <FilterBar
-            value={filters}
-            onChange={setFilters}
-            hideDateRange={isDashboard}
-            scopedProjectIds={isDashboard ? outsourcingProjectIds : undefined}
-          />
+          {!isContributorDetail && (
+            <FilterBar
+              value={filters}
+              onChange={setFilters}
+              hideDateRange={isDashboard}
+              scopedProjectIds={isDashboard ? outsourcingProjectIds : undefined}
+            />
+          )}
           <Outlet />
         </main>
       </div>
