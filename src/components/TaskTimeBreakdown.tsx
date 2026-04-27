@@ -22,11 +22,17 @@ type Slice = {
 }
 
 /**
- * Bill status counts as "billable" if the AC enum is 1 (billable),
- * 2 (already billed), or 3 (pending payment). 0 and null are not billable.
+ * AC billable_status enum:
+ *   1 / 2 / 3 → billable (billable / already billed / pending payment)
+ *   0         → not billable
+ *   null / anything else → "other" — surfaced as its own headline tile only
+ *                          when entries actually have it (expected to be 0)
  */
-function isBillable(status: number | null): boolean {
-  return status != null && status !== 0
+type BillBucket = 'billable' | 'not_billable' | 'other'
+function billBucket(status: number | null): BillBucket {
+  if (status === 0) return 'not_billable'
+  if (status === 1 || status === 2 || status === 3) return 'billable'
+  return 'other'
 }
 
 export function TaskTimeBreakdown({ estimate, actual, entries, employeeColors }: Props) {
@@ -37,15 +43,19 @@ export function TaskTimeBreakdown({ estimate, actual, entries, employeeColors }:
     [employeeColors, entries],
   )
 
-  const { byJobType, byEmployee, billableHours, notBillableHours } = useMemo(() => {
+  const { byJobType, byEmployee, billableHours, notBillableHours, otherHours } = useMemo(() => {
     const jt = new Map<string, Slice>()
     const emp = new Map<number, Slice>()
     let billable = 0
     let notBillable = 0
+    let other = 0
 
     for (const e of entries) {
-      if (isBillable(e.billable_status)) billable += e.hours
-      else notBillable += e.hours
+      switch (billBucket(e.billable_status)) {
+        case 'billable':     billable += e.hours; break
+        case 'not_billable': notBillable += e.hours; break
+        case 'other':        other += e.hours; break
+      }
 
       // Job-type bucket
       const jtKey = e.job_type_name ?? '__none__'
@@ -82,6 +92,7 @@ export function TaskTimeBreakdown({ estimate, actual, entries, employeeColors }:
       byEmployee: Array.from(emp.values()).sort((a, b) => b.hours - a.hours),
       billableHours: billable,
       notBillableHours: notBillable,
+      otherHours: other,
     }
   }, [entries, empColorMap])
 
@@ -102,26 +113,37 @@ export function TaskTimeBreakdown({ estimate, actual, entries, employeeColors }:
         ? { label: 'Over plan', value: `+${formatHours(actual - estimate)}`, tone: 'bad' }
         : { label: 'Remaining', value: formatHours(remaining ?? 0), tone: 'good' }
 
+  // Headline tiles. The first three describe the budget; the next two
+  // describe billable status. "Other" only appears when entries actually
+  // have an unrecognised billable_status (expected to be zero in practice).
+  type Tile = { label: string; value: string; tone?: 'good' | 'bad' | 'neutral' }
+  const tiles: Tile[] = [
+    { label: 'Spent', value: formatHours(actual) },
+    { label: 'Estimated', value: estimate != null ? formatHours(estimate) : '—' },
+    { label: headlineRight.label, value: headlineRight.value, tone: headlineRight.tone },
+  ]
+  if (total > 0) {
+    tiles.push({ label: 'Billable', value: formatHours(billableHours), tone: 'good' })
+    tiles.push({ label: 'Not billable', value: formatHours(notBillableHours) })
+    if (otherHours > 0) {
+      tiles.push({ label: 'Other', value: formatHours(otherHours), tone: 'bad' })
+    }
+  }
+  // grid-cols class chosen so all tiles fit on one row at lg+. With Other we
+  // need 6 columns; without Other, 5; without billable info at all (no time
+  // logged yet), 3.
+  const lgCols =
+    tiles.length === 6 ? 'lg:grid-cols-6' : tiles.length === 5 ? 'lg:grid-cols-5' : 'lg:grid-cols-3'
+
   return (
     <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm">
-      {/* Billable summary strip */}
-      {total > 0 && (
-        <BillableStrip
-          billable={billableHours}
-          notBillable={notBillableHours}
-          entryCount={entries.length}
-        />
-      )}
-
-      {/* Headline numbers */}
-      <div className="grid grid-cols-3 divide-x divide-neutral-200 border-b border-neutral-200">
-        <HeadlineStat label="Spent" value={formatHours(actual)} />
-        <HeadlineStat label="Estimated" value={estimate != null ? formatHours(estimate) : '—'} />
-        <HeadlineStat
-          label={headlineRight.label}
-          value={headlineRight.value}
-          tone={headlineRight.tone}
-        />
+      {/* Headline strip — Spent / Estimated / (Remaining or Over plan) /
+          Billable / Not billable / [Other]. The gap-px+bg-neutral-200
+          trick draws 1px dividers between tiles that survive grid wrapping. */}
+      <div className={`grid grid-cols-2 gap-px border-b border-neutral-200 bg-neutral-200 sm:grid-cols-3 ${lgCols}`}>
+        {tiles.map((t) => (
+          <HeadlineStat key={t.label} label={t.label} value={t.value} tone={t.tone} />
+        ))}
       </div>
 
       {total === 0 ? (
@@ -158,48 +180,6 @@ export function TaskTimeBreakdown({ estimate, actual, entries, employeeColors }:
   )
 }
 
-function BillableStrip({
-  billable,
-  notBillable,
-  entryCount,
-}: {
-  billable: number
-  notBillable: number
-  entryCount: number
-}) {
-  const total = billable + notBillable
-  const billablePct = total > 0 ? (billable / total) * 100 : 0
-  return (
-    <div className="border-b border-neutral-200 bg-neutral-50 px-4 py-2.5">
-      <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-4">
-          <span className="flex items-center gap-1.5">
-            <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-emerald-600" />
-            <span className="text-neutral-600">Billable</span>
-            <span className="font-semibold tabular-nums text-neutral-900">{formatHours(billable)}</span>
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-neutral-400" />
-            <span className="text-neutral-600">Not billable</span>
-            <span className="font-semibold tabular-nums text-neutral-900">{formatHours(notBillable)}</span>
-          </span>
-        </div>
-        <span className="text-neutral-400 tabular-nums">
-          {entryCount} {entryCount === 1 ? 'entry' : 'entries'}
-        </span>
-      </div>
-      {/* Inline mini-bar showing billable share */}
-      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-neutral-200">
-        <div
-          className="h-full bg-emerald-600 transition-all"
-          style={{ width: `${billablePct}%` }}
-          title={`${Math.round(billablePct)}% billable`}
-        />
-      </div>
-    </div>
-  )
-}
-
 function HeadlineStat({
   label,
   value,
@@ -216,7 +196,7 @@ function HeadlineStat({
         ? 'text-red-600'
         : 'text-neutral-900'
   return (
-    <div className="px-4 py-3">
+    <div className="bg-white px-4 py-3">
       <div className="text-[11px] uppercase tracking-wider text-neutral-500">{label}</div>
       <div className={`mt-0.5 text-2xl font-semibold tabular-nums ${valueClass}`}>{value}</div>
     </div>
