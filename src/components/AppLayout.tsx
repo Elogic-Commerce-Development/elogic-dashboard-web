@@ -21,10 +21,12 @@ export function AppLayout() {
   const routerState = useRouterState()
   const pathname = routerState.location.pathname
   const isDashboard = pathname === '/'
-  // /people is the contributor list (FilterBar useful); /people/<id> is the
-  // employee detail page which has its own period switcher and is scoped to
-  // a single user — global FilterBar is irrelevant there.
+  // /people and /projects (the lists) keep the FilterBar; the detail pages
+  // (/people/<id>, /projects/<id>) are scoped to a single entity so the
+  // global From/To + project + user multi-select adds no value there.
   const isContributorDetail = /^\/people\/[^/]+/.test(pathname)
+  const isProjectDetail = /^\/projects\/[^/]+/.test(pathname)
+  const hideFilterBar = isContributorDetail || isProjectDetail
 
   useEffect(() => {
     fetchOutsourcingProjectIds()
@@ -78,7 +80,7 @@ export function AppLayout() {
 
         <main className="mx-auto max-w-7xl space-y-5 px-6 py-6">
           <TrackingSinceBanner />
-          {!isContributorDetail && (
+          {!hideFilterBar && (
             <FilterBar
               value={filters}
               onChange={setFilters}
