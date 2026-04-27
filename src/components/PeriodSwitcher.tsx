@@ -26,6 +26,11 @@ export function PeriodSwitcher({ preset, customFrom, customTo, onChange }: Props
           label="Current week"
         />
         <PrimaryPill
+          active={preset === 'last_week'}
+          onClick={() => onChange('last_week')}
+          label="Last week"
+        />
+        <PrimaryPill
           active={preset === 'current_month'}
           onClick={() => onChange('current_month')}
           label="Current month"

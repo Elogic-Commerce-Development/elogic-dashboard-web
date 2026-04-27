@@ -8,6 +8,7 @@
 
 export type PeriodPreset =
   | 'current_week'
+  | 'last_week'
   | 'current_month'
   | 'previous_month'
   | 'current_year'
@@ -18,6 +19,7 @@ export type PeriodRange = { from: string; to: string }
 
 export const PERIOD_LABELS: Record<PeriodPreset, string> = {
   current_week: 'Current week',
+  last_week: 'Last week',
   current_month: 'Current month',
   previous_month: 'Previous month',
   current_year: 'Current year',
@@ -36,6 +38,12 @@ export function periodRange(
   switch (preset) {
     case 'current_week':
       return { from: toIso(startOfIsoWeek(today)), to: toIso(today) }
+    case 'last_week': {
+      const startThisWeek = startOfIsoWeek(today)
+      const endLastWeek = addDays(startThisWeek, -1)        // Sunday
+      const startLastWeek = addDays(startThisWeek, -7)      // Monday
+      return { from: toIso(startLastWeek), to: toIso(endLastWeek) }
+    }
     case 'current_month':
       return { from: toIso(startOfMonth(today)), to: toIso(today) }
     case 'previous_month': {
@@ -62,7 +70,7 @@ export function periodRange(
 
 export function isValidPreset(value: string | undefined): value is PeriodPreset {
   if (value === undefined) return false
-  return ['current_week', 'current_month', 'previous_month', 'current_year', 'previous_year', 'custom'].includes(value)
+  return ['current_week', 'last_week', 'current_month', 'previous_month', 'current_year', 'previous_year', 'custom'].includes(value)
 }
 
 // All date math is in UTC to avoid client-timezone drift on the date boundary.
@@ -92,6 +100,10 @@ function startOfIsoWeek(d: Date): Date {
 
 function addMonths(d: Date, months: number): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + months, d.getUTCDate()))
+}
+
+function addDays(d: Date, days: number): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + days))
 }
 
 function toIso(d: Date): string {
