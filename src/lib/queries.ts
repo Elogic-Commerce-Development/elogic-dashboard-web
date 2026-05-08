@@ -334,22 +334,122 @@ export async function fetchContributorTaskSummary(
   contributorId: number,
   range?: { from?: string; to?: string },
 ): Promise<ContributorTaskSummary[]> {
-  let q = supabase
-    .from('v_contributor_task_summary')
-    .select('*')
-    .eq('contributor_id', contributorId)
-    .order('created_on', { ascending: false })
+  // No range → all-time view.
+  if (!range?.from && !range?.to) {
+    const { data, error } = await supabase
+      .from('v_contributor_task_summary')
+      .select('*')
+      .eq('contributor_id', contributorId)
+      .order('created_on', { ascending: false })
+    if (error) throw error
+    return (data ?? []) as ContributorTaskSummary[]
+  }
 
-  // Period filter applies to the task's creation date — same convention as
-  // the other AC views. Tasks created before `from` but with time logged
-  // inside the range are excluded; that's the same behavior the other tables
-  // have, and matches what the user expects when scoping to a period.
-  if (range?.from) q = q.gte('created_on', range.from)
-  if (range?.to) q = q.lte('created_on', range.to + 'T23:59:59.999Z')
+  // Periodized view. The pre-aggregated view filters wouldn't work — the
+  // view's `contributor_hours` is all-time, and filtering by task `created_on`
+  // hides legacy recurring tasks ("Daily meetings", "Standup") that the user
+  // may have logged time against during the period. Walk `time_records`
+  // directly with an embedded task+project and aggregate client-side.
+  const from = range.from ?? '0001-01-01'
+  const to = range.to ?? '9999-12-31'
 
-  const { data, error } = await q
-  if (error) throw error
-  return (data ?? []) as ContributorTaskSummary[]
+  type RawRow = {
+    task_id: number
+    value_hours: number
+    task: {
+      id: number
+      name: string
+      project_id: number
+      assignee_id: number | null
+      estimate_hours: number | null
+      is_completed: boolean
+      completed_on: string | null
+      created_on: string
+      project: { id: number; name: string } | null
+    } | null
+  }
+
+  // Q1: this user's records in period with task + project embedded.
+  const { data: mine, error: mineErr } = await supabase
+    .from('time_records')
+    .select(
+      'task_id, value_hours, task:tasks(id, name, project_id, assignee_id, estimate_hours, is_completed, completed_on, created_on, project:projects(id, name))',
+    )
+    .eq('user_id', contributorId)
+    .eq('is_trashed', false)
+    .gte('record_date', from)
+    .lte('record_date', to)
+    .not('task_id', 'is', null)
+    .limit(10000)
+  if (mineErr) throw mineErr
+
+  const myRows = (mine ?? []) as unknown as RawRow[]
+  if (myRows.length === 0) return []
+
+  // Aggregate this user's hours per task and stash task metadata.
+  const perTask = new Map<
+    number,
+    { my_hours: number; task: NonNullable<RawRow['task']> }
+  >()
+  for (const r of myRows) {
+    if (!r.task) continue
+    const existing = perTask.get(r.task_id)
+    if (existing) {
+      existing.my_hours += Number(r.value_hours)
+    } else {
+      perTask.set(r.task_id, { my_hours: Number(r.value_hours), task: r.task })
+    }
+  }
+
+  // Q2: every user's hours on those tasks in the same period — for the
+  // "Task actual" + "Share" columns. Only one round-trip; values_hours is a
+  // numeric column so the payload is small.
+  const taskIds = Array.from(perTask.keys())
+  const { data: allRows, error: allErr } = await supabase
+    .from('time_records')
+    .select('task_id, value_hours')
+    .in('task_id', taskIds)
+    .eq('is_trashed', false)
+    .gte('record_date', from)
+    .lte('record_date', to)
+    .limit(50000)
+  if (allErr) throw allErr
+
+  const taskTotals = new Map<number, number>()
+  for (const r of (allRows ?? []) as { task_id: number; value_hours: number }[]) {
+    taskTotals.set(r.task_id, (taskTotals.get(r.task_id) ?? 0) + Number(r.value_hours))
+  }
+
+  // We need the contributor's display name once. Look it up from any users
+  // table row — cheap and lets us match the existing return shape.
+  const { data: contribRow } = await supabase
+    .from('users')
+    .select('display_name')
+    .eq('id', contributorId)
+    .maybeSingle()
+  const contributorName = (contribRow?.display_name as string | undefined) ?? `User #${contributorId}`
+
+  const summaries: ContributorTaskSummary[] = []
+  for (const [taskId, { my_hours, task }] of perTask.entries()) {
+    summaries.push({
+      contributor_id: contributorId,
+      contributor_name: contributorName,
+      task_id: taskId,
+      task_name: task.name,
+      project_id: task.project_id,
+      project_name: task.project?.name ?? '',
+      assignee_id: task.assignee_id,
+      estimate_hours: task.estimate_hours,
+      contributor_hours: my_hours,
+      task_actual_hours: taskTotals.get(taskId) ?? my_hours,
+      is_completed: task.is_completed,
+      completed_on: task.completed_on,
+      created_on: task.created_on,
+    })
+  }
+  // Most recently created first (matches the all-time fetcher's order).
+  summaries.sort((a, b) => (a.created_on < b.created_on ? 1 : -1))
+  return summaries
 }
 
 export async function fetchUserDetail(userId: number): Promise<UserDetail | null> {
