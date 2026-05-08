@@ -23,6 +23,7 @@ import type { EmployeeDay } from './queries'
 
 export type UtilizationBucket =
   | 'tracked'
+  | 'over_tracked'
   | 'missing'
   | 'vacation'
   | 'sick'
@@ -31,6 +32,7 @@ export type UtilizationBucket =
 
 export const BUCKET_LABELS: Record<UtilizationBucket, string> = {
   tracked: 'Tracked',
+  over_tracked: 'Above plan',
   missing: 'Missing',
   vacation: 'Vacation',
   sick: 'Sick leave',
@@ -41,6 +43,7 @@ export const BUCKET_LABELS: Record<UtilizationBucket, string> = {
 /** Tailwind hex values used by Recharts (cannot use Tailwind class names). */
 export const BUCKET_COLORS: Record<UtilizationBucket, string> = {
   tracked: '#059669',        // emerald-600
+  over_tracked: '#ec4899',   // pink-500 — bright, distinct from any absence colour
   missing: '#dc2626',        // red-600
   vacation: '#2563eb',       // blue-600
   sick: '#d97706',           // amber-600
@@ -79,6 +82,7 @@ export type UtilizationSummary = {
 
 const ZERO_BUCKETS: Record<UtilizationBucket, number> = {
   tracked: 0,
+  over_tracked: 0,
   missing: 0,
   vacation: 0,
   sick: 0,
@@ -188,6 +192,7 @@ export function summarizeUtilization(
 
   buckets.tracked = trackedInChart
   buckets.missing = missingHours
+  buckets.over_tracked = overTrackedHours
 
   return {
     from,

@@ -3,9 +3,11 @@ import { BUCKET_COLORS, BUCKET_LABELS, type UtilizationBucket, type UtilizationS
 
 type Props = { summary: UtilizationSummary }
 
-// Order matters for legend readability: tracked first, then absences, then missing.
+// Order matters for legend readability: tracked first, then over-plan
+// (so the eye reads them adjacently), then absences, then missing.
 const SLICE_ORDER: UtilizationBucket[] = [
   'tracked',
+  'over_tracked',
   'vacation',
   'sick',
   'unpaid_leave',
