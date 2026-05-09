@@ -8,7 +8,7 @@ import {
   type TaskContributor,
   type TaskTimeEntry,
 } from '@/lib/queries'
-import { formatHours, formatRatio, acTaskUrl, acProjectUrl } from '@/lib/format'
+import { formatHours, formatRatio, formatQa, acTaskUrl, acProjectUrl } from '@/lib/format'
 import { buildEmployeeColorMap } from '@/lib/contributorColors'
 import { TaskTimeBreakdown } from '@/components/TaskTimeBreakdown'
 import { TaskTimeEntries } from '@/components/TaskTimeEntries'
@@ -120,6 +120,26 @@ export function TaskDetailPage() {
             </>
           )}
         </div>
+        {(task.qa_iterations != null || task.qa_bugs != null) && (
+          <div className="mt-2 flex items-center gap-2">
+            {task.qa_iterations != null && (
+              <span
+                className="inline-flex items-center rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700 ring-1 ring-inset ring-violet-200"
+                title="QA iterations: how many times this ticket was sent back for another QA cycle"
+              >
+                QA Iterations: <span className="ml-1 tabular-nums">{formatQa(task.qa_iterations, task.qa_iterations_capped)}</span>
+              </span>
+            )}
+            {task.qa_bugs != null && (
+              <span
+                className="inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-200"
+                title="QA bugs: how many bugs were found on this ticket"
+              >
+                QA Bugs: <span className="ml-1 tabular-nums">{formatQa(task.qa_bugs, task.qa_bugs_capped)}</span>
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       <TaskTimeBreakdown

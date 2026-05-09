@@ -9,6 +9,11 @@ export function formatRatio(value: number | null | undefined): string {
   return `${pct}%`
 }
 
+export function formatQa(value: number | null | undefined, capped: boolean | null | undefined): string | null {
+  if (value === null || value === undefined) return null
+  return capped ? `${value}+` : String(value)
+}
+
 export function formatDate(value: string | null | undefined): string {
   if (!value) return '—'
   const d = new Date(value)

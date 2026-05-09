@@ -26,6 +26,10 @@ export type TaskActualVsEstimate = {
   completed_on: string | null
   created_on: string
   last_record_date: string | null
+  qa_iterations: number | null
+  qa_iterations_capped: boolean
+  qa_bugs: number | null
+  qa_bugs_capped: boolean
 }
 
 export type EstimateAccuracyByUser = {
