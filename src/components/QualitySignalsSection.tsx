@@ -228,7 +228,7 @@ export function QualitySignalsSection({
   tasks: TaskActualVsEstimate[]
   range: DashboardPeriodRange
 }) {
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(false)
 
   const iterations = useMemo(
     () =>
