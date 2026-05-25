@@ -210,6 +210,8 @@ export function DashboardPage() {
         <EstimateAccuracyChart tasks={tasks} range={range} />
       </div>
 
+      <QualitySignalsSection tasks={tasks} range={range} />
+
       <div className="grid gap-6 lg:grid-cols-2">
         <ShortlistCard
           title="Active overruns (last 30 days)"
@@ -302,8 +304,6 @@ export function DashboardPage() {
           )}
         />
       </div>
-
-      <QualitySignalsSection tasks={tasks} range={range} />
     </div>
   )
 }
