@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Link } from '@tanstack/react-router'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import {
   fetchMonthlyTrendFiltered,
   fetchAllTasksFiltered,
@@ -10,8 +10,16 @@ import {
   type TaskActualVsEstimate,
 } from '@/lib/queries'
 import { formatHours, formatRatio, acTaskUrl } from '@/lib/format'
-import { TrendCharts } from '@/components/TrendCharts'
+import { EstimationAdoptionChart } from '@/components/EstimationAdoptionChart'
+import { EstimateAccuracyChart } from '@/components/EstimateAccuracyChart'
+import { QualitySignalsSection } from '@/components/QualitySignalsSection'
+import { DashboardPeriodSwitcher } from '@/components/DashboardPeriodSwitcher'
 import { useFilters } from '@/lib/FilterContext'
+import {
+  DEFAULT_DASHBOARD_PERIOD,
+  dashboardPeriodRange,
+  type DashboardPeriodPreset,
+} from '@/lib/dashboardPeriod'
 
 function KpiCard({
   label,
@@ -101,19 +109,20 @@ function computeShortlists(tasks: TaskActualVsEstimate[]) {
 }
 
 export function DashboardPage() {
-  const { filters, outsourcingProjectIds } = useFilters()
+  const { outsourcingProjectIds } = useFilters()
+  const search = useSearch({ from: '/' })
+  const navigate = useNavigate()
+  const preset: DashboardPeriodPreset = search.period ?? DEFAULT_DASHBOARD_PERIOD
+  const range = useMemo(() => dashboardPeriodRange(preset), [preset])
 
-  // Dashboard is always scoped to outsourcing projects.
-  // If user selects specific projects in the filter, use those (they're
-  // already limited to outsourcing projects by the FilterBar scope).
-  // Otherwise use all outsourcing project IDs.
-  const effectiveProjectIds = filters.projectIds.length > 0
-    ? filters.projectIds
-    : outsourcingProjectIds
+  function setPreset(next: DashboardPeriodPreset) {
+    navigate({
+      to: '/',
+      search: () => ({ period: next === DEFAULT_DASHBOARD_PERIOD ? undefined : next }),
+    })
+  }
 
-  const [kpis, setKpis] = useState<GlobalKpis | null>(null)
-  const [topOverruns, setTopOverruns] = useState<RecentOverrun[]>([])
-  const [topUnestimated, setTopUnestimated] = useState<RecentUnestimated[]>([])
+  const [tasks, setTasks] = useState<TaskActualVsEstimate[]>([])
   const [trend, setTrend] = useState<MonthlyTrend[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -124,35 +133,45 @@ export function DashboardPage() {
     let cancelled = false
     setLoading(true)
 
-    // Always use filtered mode — dashboard is scoped to outsourcing projects
-    fetchAllTasksFiltered(effectiveProjectIds, filters.userIds)
-      .then(async (tasks) => {
+    fetchAllTasksFiltered(outsourcingProjectIds, [])
+      .then(async (rows) => {
         if (cancelled) return
-        setKpis(computeKpisFromTasks(tasks))
-        const lists = computeShortlists(tasks)
-        setTopOverruns(lists.overruns)
-        setTopUnestimated(lists.unestimated)
-        const t = await fetchMonthlyTrendFiltered(effectiveProjectIds, filters.userIds, tasks)
+        setTasks(rows)
+        const t = await fetchMonthlyTrendFiltered(outsourcingProjectIds, [], rows)
         if (!cancelled) setTrend(t)
       })
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoading(false) })
 
     return () => { cancelled = true }
-  }, [outsourcingProjectIds, effectiveProjectIds, filters.userIds])
+  }, [outsourcingProjectIds])
+
+  const tasksInPeriod = useMemo(
+    () => tasks.filter((t) => t.created_on >= range.from && t.created_on <= `${range.to}T23:59:59Z`),
+    [tasks, range],
+  )
+
+  const kpis = useMemo<GlobalKpis>(
+    () => computeKpisFromTasks(tasksInPeriod),
+    [tasksInPeriod],
+  )
+  const { overruns: topOverruns, unestimated: topUnestimated } = useMemo(
+    () => computeShortlists(tasks),
+    [tasks],
+  )
 
   if (loading) {
     return <div className="py-12 text-center text-sm text-neutral-400">Loading dashboard...</div>
-  }
-
-  if (!kpis) {
-    return <div className="py-12 text-center text-sm text-neutral-400">No data available.</div>
   }
 
   const adoption = kpis.estimate_adoption_rate != null ? Math.round(kpis.estimate_adoption_rate * 100) : 0
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <DashboardPeriodSwitcher preset={preset} onChange={setPreset} />
+      </div>
+
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <KpiCard
           label="Unestimated tasks with time"
@@ -186,12 +205,15 @@ export function DashboardPage() {
         />
       </div>
 
-      <TrendCharts data={trend} />
+      <div className="grid gap-6 lg:grid-cols-2">
+        <EstimationAdoptionChart data={trend} range={range} />
+        <EstimateAccuracyChart tasks={tasks} range={range} />
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <ShortlistCard
           title="Active overruns (last 30 days)"
-          description="Overrun tasks with the most hours tracked recently."
+          description="Overrun tasks with the most hours tracked recently. Always last 30 days, independent of selected period."
           viewAllTo="/overview"
           rows={topOverruns}
           renderRow={(row) => (
@@ -239,7 +261,7 @@ export function DashboardPage() {
 
         <ShortlistCard
           title="Unestimated with recent time (last 30 days)"
-          description="Open tasks without estimates being actively worked on."
+          description="Open tasks without estimates being actively worked on. Always last 30 days, independent of selected period."
           viewAllTo="/overview"
           rows={topUnestimated}
           renderRow={(row) => (
@@ -280,6 +302,8 @@ export function DashboardPage() {
           )}
         />
       </div>
+
+      <QualitySignalsSection tasks={tasks} range={range} />
     </div>
   )
 }
