@@ -24,6 +24,13 @@ type Bucket = {
   p25: number | null
   p75: number | null
   sample_size: number
+  /**
+   * Bar height to render. For months with data this equals median_overrun_ratio.
+   * For empty months it's a small fraction of the max real ratio so a faint
+   * placeholder bar is visible (Recharts skips bars with null values, which
+   * makes empty periods look like the chart is broken).
+   */
+  bar_value: number
 }
 
 function formatMonthLabel(monthIso: string): string {
@@ -50,7 +57,7 @@ function buildBuckets(tasks: TaskActualVsEstimate[], range: DashboardPeriodRange
     bucket.push(act / est)
   }
 
-  return months.map((m) => {
+  const withMedians = months.map((m) => {
     const ratios = ratiosByMonth.get(m) ?? []
     return {
       month: m,
@@ -61,6 +68,17 @@ function buildBuckets(tasks: TaskActualVsEstimate[], range: DashboardPeriodRange
       sample_size: ratios.length,
     }
   })
+
+  const maxReal = withMedians.reduce(
+    (m, b) => (b.median_overrun_ratio != null && b.median_overrun_ratio > m ? b.median_overrun_ratio : m),
+    1,
+  )
+  const placeholder = maxReal * 0.05
+
+  return withMedians.map((b) => ({
+    ...b,
+    bar_value: b.median_overrun_ratio ?? placeholder,
+  }))
 }
 
 function barColor(ratio: number | null): string {
@@ -147,12 +165,12 @@ export function EstimateAccuracyChart({
               />
               <Tooltip content={(props) => <AccuracyTooltip {...props} />} cursor={{ fill: '#f5f5f5' }} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Bar yAxisId="left" dataKey="median_overrun_ratio" name="Median ratio">
+              <Bar yAxisId="left" dataKey="bar_value" name="Median ratio">
                 {data.map((d) => (
                   <Cell
                     key={d.month}
-                    fill={barColor(d.median_overrun_ratio)}
-                    fillOpacity={d.sample_size === 0 ? 0.15 : 0.75}
+                    fill={d.sample_size === 0 ? '#a3a3a3' : barColor(d.median_overrun_ratio)}
+                    fillOpacity={d.sample_size === 0 ? 0.25 : 0.75}
                   />
                 ))}
               </Bar>
