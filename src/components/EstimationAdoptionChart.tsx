@@ -11,7 +11,7 @@ import {
   Legend,
 } from 'recharts'
 import type { MonthlyTrend } from '@/lib/queries'
-import type { DashboardPeriodRange } from '@/lib/dashboardPeriod'
+import { enumerateMonths, type DashboardPeriodRange } from '@/lib/dashboardPeriod'
 
 function formatMonth(dateStr: string): string {
   const d = new Date(dateStr + 'T00:00:00Z')
@@ -22,19 +22,24 @@ type ChartRow = {
   label: string
   unestimatedTasks: number
   estimatedTasks: number
-  adoptionPct: number
+  adoptionPct: number | null
 }
 
 function prepareData(data: MonthlyTrend[], range: DashboardPeriodRange): ChartRow[] {
-  return data
-    .filter((d) => d.month >= range.from && d.month <= range.to)
-    .map((d) => ({
-      label: formatMonth(d.month),
+  const byMonth = new Map(data.map((d) => [d.month, d]))
+  return enumerateMonths(range).map((m) => {
+    const d = byMonth.get(m)
+    if (!d) {
+      return { label: formatMonth(m), unestimatedTasks: 0, estimatedTasks: 0, adoptionPct: null }
+    }
+    return {
+      label: formatMonth(m),
       unestimatedTasks: Number(d.unestimated_tasks),
       estimatedTasks: Number(d.active_tasks) - Number(d.unestimated_tasks),
       adoptionPct:
-        d.estimate_adoption_rate != null ? Math.round(Number(d.estimate_adoption_rate) * 100) : 0,
-    }))
+        d.estimate_adoption_rate != null ? Math.round(Number(d.estimate_adoption_rate) * 100) : null,
+    }
+  })
 }
 
 export function EstimationAdoptionChart({
@@ -45,6 +50,7 @@ export function EstimationAdoptionChart({
   range: DashboardPeriodRange
 }) {
   const chartData = useMemo(() => prepareData(data, range), [data, range])
+  const hasAny = chartData.some((d) => d.estimatedTasks > 0 || d.unestimatedTasks > 0)
 
   return (
     <div className="rounded-lg border border-neutral-200 bg-white shadow-sm">
@@ -53,7 +59,7 @@ export function EstimationAdoptionChart({
         <p className="text-xs text-neutral-500">Monthly task counts with/without estimates, and adoption rate.</p>
       </div>
       <div className="px-2 py-4" style={{ height: 300 }}>
-        {chartData.length === 0 ? (
+        {!hasAny ? (
           <div className="flex h-full items-center justify-center text-xs text-neutral-400">
             No activity in this period yet.
           </div>
