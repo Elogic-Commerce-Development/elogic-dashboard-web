@@ -209,17 +209,28 @@ export async function fetchTasksOverrun(filters: Filters): Promise<TaskActualVsE
 }
 
 export async function fetchAllTasksFiltered(projectIds: number[], userIds: number[]): Promise<TaskActualVsEstimate[]> {
-  let q = supabase
-    .from('v_task_actual_vs_estimate')
-    .select('*')
-    .order('created_on', { ascending: false })
-
-  if (projectIds.length > 0) q = q.in('project_id', projectIds)
-  if (userIds.length > 0) q = q.in('assignee_id', userIds)
-
-  const { data, error } = await q
-  if (error) throw error
-  return (data ?? []) as TaskActualVsEstimate[]
+  // PostgREST caps each response at 1000 rows by default. The outsourcing
+  // scope can exceed that, so walk pages until we get a short page. Same
+  // pattern as fetchMonthlyTrendFiltered below.
+  const PAGE = 1000
+  const all: TaskActualVsEstimate[] = []
+  let offset = 0
+  while (true) {
+    let q = supabase
+      .from('v_task_actual_vs_estimate')
+      .select('*')
+      .order('created_on', { ascending: false })
+      .range(offset, offset + PAGE - 1)
+    if (projectIds.length > 0) q = q.in('project_id', projectIds)
+    if (userIds.length > 0) q = q.in('assignee_id', userIds)
+    const { data, error } = await q
+    if (error) throw error
+    const rows = (data ?? []) as TaskActualVsEstimate[]
+    all.push(...rows)
+    if (rows.length < PAGE) break
+    offset += PAGE
+  }
+  return all
 }
 
 export async function fetchActualVsEstimate(filters: Filters): Promise<TaskActualVsEstimate[]> {
