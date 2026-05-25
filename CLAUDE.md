@@ -139,15 +139,27 @@ npm run lint         # eslint
 
 ## Browser verification via Chrome MCP
 
-There's no preview-server connection to Supabase locally — the bundle reads
-`VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` at build time and `.env.local`
-is operator-owned, not committed. So the established way to verify a UI
+**Claude has no working `.env.local`.** Supabase credentials are
+operator-owned, so `npm run dev` won't connect to anything useful on
+Claude's machine. Local verification is limited to:
+
+```bash
+npm run lint     # eslint
+npm run build    # tsc + vite build
+```
+
+Do not propose a local smoke-test step in plans — the operator has stated
+this directly. The bundle reads `VITE_SUPABASE_URL` and
+`VITE_SUPABASE_ANON_KEY` at build time from `.env.local`, which only
+exists on the operator's machine. The established way to verify a UI
 change end-to-end against real data is:
 
-1. Push the feature branch.
-2. Operator merges the PR (or asks for a Vercel preview deployment).
-3. Operator types something like "deployed" in chat once Vercel is done.
-4. Claude uses the **Chrome MCP** (tools named `mcp__Claude_in_Chrome__*`)
+1. `git switch main && git pull` so the feature branch comes off clean main.
+2. Create the feature branch, make changes, run `npm run lint && npm run build`.
+3. Push the branch and open a PR with `gh pr create`. Reply with the PR URL.
+4. Operator merges the PR (or asks for a Vercel preview deployment).
+5. Operator types something like "deployed" in chat once Vercel is done.
+6. Claude uses the **Chrome MCP** (tools named `mcp__Claude_in_Chrome__*`)
    against the production URL `https://elogic-dashboard-web.vercel.app`.
 
 This works because the operator's existing Chrome session is already

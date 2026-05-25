@@ -27,7 +27,7 @@ export function AppLayout() {
   const isContributorDetail = /^\/people\/[^/]+/.test(pathname)
   const isProjectDetail = /^\/projects\/[^/]+/.test(pathname)
   const isTaskDetail = /^\/tasks\/[^/]+/.test(pathname)
-  const hideFilterBar = isContributorDetail || isProjectDetail || isTaskDetail
+  const hideFilterBar = isDashboard || isContributorDetail || isProjectDetail || isTaskDetail
 
   useEffect(() => {
     fetchOutsourcingProjectIds()

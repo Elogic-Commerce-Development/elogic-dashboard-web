@@ -8,6 +8,7 @@ import { ProjectDetailPage } from '@/pages/ProjectDetailPage'
 import { ContributorDetailPage } from '@/pages/ContributorDetailPage'
 import { TaskDetailPage } from '@/pages/TaskDetailPage'
 import { isValidPreset, type PeriodPreset } from '@/lib/period'
+import { isValidDashboardPeriodPreset, type DashboardPeriodPreset } from '@/lib/dashboardPeriod'
 
 export type ContributorDetailSearch = {
   // All optional so existing <Link to="/people/$userId"> call sites without
@@ -18,6 +19,10 @@ export type ContributorDetailSearch = {
   to?: string
 }
 
+export type DashboardSearch = {
+  period?: DashboardPeriodPreset
+}
+
 const rootRoute = createRootRoute({
   component: AppLayout,
 })
@@ -26,6 +31,12 @@ const dashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   component: DashboardPage,
+  validateSearch: (search: Record<string, unknown>): DashboardSearch => {
+    const raw = typeof search.period === 'string' ? search.period : undefined
+    return {
+      period: isValidDashboardPeriodPreset(raw) ? raw : undefined,
+    }
+  },
 })
 
 const overviewRoute = createRoute({
