@@ -14,21 +14,22 @@ import {
   type TooltipContentProps,
 } from 'recharts'
 import type { TaskActualVsEstimate } from '@/lib/queries'
-import { median, percentile } from '@/lib/stats'
+import { mean } from '@/lib/stats'
 import { enumerateMonths, type DashboardPeriodRange } from '@/lib/dashboardPeriod'
 
 type Bucket = {
   month: string                            // "YYYY-MM-01"
   label: string                            // "Apr 26"
-  median_overrun_ratio: number | null
-  p25: number | null
-  p75: number | null
+  /** Mean of (actual_hours / estimate_hours) across qualifying tasks. */
+  mean_usage: number | null
+  min_usage: number | null
+  max_usage: number | null
   sample_size: number
   /**
-   * Bar height to render. For months with data this equals median_overrun_ratio.
-   * For empty months it's a small fraction of the max real ratio so a faint
-   * placeholder bar is visible (Recharts skips bars with null values, which
-   * makes empty periods look like the chart is broken).
+   * Bar height to render. For months with data this equals mean_usage.
+   * For empty months it's a small fraction of the largest real usage so a
+   * faint placeholder bar is visible (Recharts skips bars with null values,
+   * which makes empty periods look like the chart is broken).
    */
   bar_value: number
 }
@@ -40,8 +41,8 @@ function formatMonthLabel(monthIso: string): string {
 
 function buildBuckets(tasks: TaskActualVsEstimate[], range: DashboardPeriodRange): Bucket[] {
   const months = enumerateMonths(range)
-  const ratiosByMonth = new Map<string, number[]>()
-  for (const m of months) ratiosByMonth.set(m, [])
+  const usagesByMonth = new Map<string, number[]>()
+  for (const m of months) usagesByMonth.set(m, [])
 
   for (const t of tasks) {
     if (!t.is_completed) continue
@@ -52,39 +53,40 @@ function buildBuckets(tasks: TaskActualVsEstimate[], range: DashboardPeriodRange
     if (!(act > 0)) continue
     if (!t.completed_on) continue
     const monthKey = t.completed_on.slice(0, 7) + '-01'
-    const bucket = ratiosByMonth.get(monthKey)
+    const bucket = usagesByMonth.get(monthKey)
     if (!bucket) continue
     bucket.push(act / est)
   }
 
-  const withMedians = months.map((m) => {
-    const ratios = ratiosByMonth.get(m) ?? []
+  const withStats = months.map((m) => {
+    const usages = usagesByMonth.get(m) ?? []
+    const meanUsage = mean(usages)
     return {
       month: m,
       label: formatMonthLabel(m),
-      median_overrun_ratio: median(ratios),
-      p25: percentile(ratios, 0.25),
-      p75: percentile(ratios, 0.75),
-      sample_size: ratios.length,
+      mean_usage: meanUsage,
+      min_usage: usages.length === 0 ? null : Math.min(...usages),
+      max_usage: usages.length === 0 ? null : Math.max(...usages),
+      sample_size: usages.length,
     }
   })
 
-  const maxReal = withMedians.reduce(
-    (m, b) => (b.median_overrun_ratio != null && b.median_overrun_ratio > m ? b.median_overrun_ratio : m),
+  const maxReal = withStats.reduce(
+    (m, b) => (b.mean_usage != null && b.mean_usage > m ? b.mean_usage : m),
     1,
   )
   const placeholder = maxReal * 0.05
 
-  return withMedians.map((b) => ({
+  return withStats.map((b) => ({
     ...b,
-    bar_value: b.median_overrun_ratio ?? placeholder,
+    bar_value: b.mean_usage ?? placeholder,
   }))
 }
 
-function barColor(ratio: number | null): string {
-  if (ratio == null) return '#e5e5e5'
-  if (ratio >= 2) return '#dc2626'      // red-600
-  if (ratio >= 1.5) return '#d97706'    // amber-600
+function barColor(usage: number | null): string {
+  if (usage == null) return '#e5e5e5'
+  if (usage >= 2) return '#dc2626'      // red-600
+  if (usage >= 1.5) return '#d97706'    // amber-600
   return '#059669'                       // emerald-600
 }
 
@@ -99,12 +101,12 @@ function AccuracyTooltip({ active, payload }: TooltipContentProps) {
       ) : (
         <div className="mt-1 space-y-0.5 text-neutral-700">
           <div>
-            <span className="text-neutral-500">Median:</span>{' '}
-            <span className="font-medium">{formatRatioPct(row.median_overrun_ratio)}</span>
+            <span className="text-neutral-500">Avg usage:</span>{' '}
+            <span className="font-medium">{formatPct(row.mean_usage)}</span>
           </div>
           <div>
-            <span className="text-neutral-500">p25–p75:</span>{' '}
-            <span className="font-medium">{formatRatioPct(row.p25)} – {formatRatioPct(row.p75)}</span>
+            <span className="text-neutral-500">Min–max:</span>{' '}
+            <span className="font-medium">{formatPct(row.min_usage)} – {formatPct(row.max_usage)}</span>
           </div>
           <div>
             <span className="text-neutral-500">Sample size:</span>{' '}
@@ -116,7 +118,7 @@ function AccuracyTooltip({ active, payload }: TooltipContentProps) {
   )
 }
 
-function formatRatioPct(r: number | null | undefined): string {
+function formatPct(r: number | null | undefined): string {
   if (r == null) return '—'
   return `${Math.round(r * 100)}%`
 }
@@ -136,7 +138,8 @@ export function EstimateAccuracyChart({
       <div className="border-b border-neutral-100 px-4 py-3">
         <h3 className="text-sm font-semibold text-neutral-900">Estimate accuracy over time</h3>
         <p className="text-xs text-neutral-500">
-          Median overrun ratio for tasks with an estimate and logged time. Sample size shown on the right axis.
+          Average usage of the estimate (logged hours ÷ estimated hours) for tasks completed each
+          month. 100% = on estimate. Sample size shown on the right axis.
         </p>
       </div>
       <div className="px-2 py-4" style={{ height: 300 }}>
@@ -165,11 +168,11 @@ export function EstimateAccuracyChart({
               />
               <Tooltip content={(props) => <AccuracyTooltip {...props} />} cursor={{ fill: '#f5f5f5' }} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Bar yAxisId="left" dataKey="bar_value" name="Median ratio">
+              <Bar yAxisId="left" dataKey="bar_value" name="Avg usage">
                 {data.map((d) => (
                   <Cell
                     key={d.month}
-                    fill={d.sample_size === 0 ? '#a3a3a3' : barColor(d.median_overrun_ratio)}
+                    fill={d.sample_size === 0 ? '#a3a3a3' : barColor(d.mean_usage)}
                     fillOpacity={d.sample_size === 0 ? 0.25 : 0.75}
                   />
                 ))}
