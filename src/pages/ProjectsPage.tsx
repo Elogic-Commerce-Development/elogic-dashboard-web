@@ -4,21 +4,21 @@ import type { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/components/DataTable'
 import { QaRate } from '@/components/QaRate'
 import { useFilters } from '@/lib/FilterContext'
-import { fetchContributorStats, type ContributorStats } from '@/lib/queries'
-import { fetchContributorStatsForPeriod } from '@/lib/periodStats'
+import { fetchProjectStats, type ProjectStats } from '@/lib/queries'
+import { fetchProjectStatsForPeriod } from '@/lib/periodStats'
 import { formatHours } from '@/lib/format'
 
-const columns: ColumnDef<ContributorStats>[] = [
+const columns: ColumnDef<ProjectStats>[] = [
   {
-    accessorKey: 'contributor_name',
-    header: 'Contributor',
+    accessorKey: 'project_name',
+    header: 'Project Name',
     cell: ({ row }) => (
       <Link
-        to="/people/$userId"
-        params={{ userId: String(row.original.contributor_id) }}
+        to="/projects/$projectId"
+        params={{ projectId: String(row.original.project_id) }}
         className="font-medium text-blue-600 hover:text-blue-800 hover:underline"
       >
-        {row.original.contributor_name}
+        {row.original.project_name}
       </Link>
     ),
   },
@@ -27,7 +27,7 @@ const columns: ColumnDef<ContributorStats>[] = [
     header: 'Total hours',
     cell: ({ getValue }) => formatHours(Number(getValue())),
   },
-  { accessorKey: 'tasks_contributed_to', header: 'Tasks' },
+  { accessorKey: 'tasks_with_time', header: 'Tasks' },
   {
     accessorKey: 'unestimated_tasks',
     header: 'Unestimated',
@@ -69,25 +69,25 @@ const columns: ColumnDef<ContributorStats>[] = [
       />
     ),
   },
-  { accessorKey: 'projects_contributed_to', header: 'Projects' },
+  { accessorKey: 'team_members', header: 'Team Members' },
 ]
 
-export function PeoplePage() {
+export function ProjectsPage() {
   const { filters } = useFilters()
-  const [rows, setRows] = useState<ContributorStats[]>([])
+  const [rows, setRows] = useState<ProjectStats[]>([])
   const [loading, setLoading] = useState(false)
 
-  // This page filters by people + date range only; filters.projectIds is
-  // deliberately ignored (the Projects select is hidden here).
-  const { from, to, userIds } = filters
+  // This page filters by projects + date range only; filters.userIds is
+  // deliberately ignored (the Users select is hidden here).
+  const { from, to, projectIds } = filters
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     const hasPeriod = Boolean(from || to)
     const load = hasPeriod
-      ? fetchContributorStatsForPeriod({ from, to, userIds })
-      : fetchContributorStats(userIds)
+      ? fetchProjectStatsForPeriod({ from, to, projectIds })
+      : fetchProjectStats(projectIds)
     load
       .then((data) => {
         if (!cancelled) setRows(data)
@@ -101,18 +101,18 @@ export function PeoplePage() {
     return () => {
       cancelled = true
     }
-  }, [from, to, userIds])
+  }, [from, to, projectIds])
 
   return (
     <div className="space-y-3">
       <div>
-        <h2 className="text-sm font-semibold text-neutral-900">Contributors (by time tracking)</h2>
+        <h2 className="text-sm font-semibold text-neutral-900">Projects (by time tracking)</h2>
         <p className="text-xs text-neutral-500">
-          Metrics are based on who tracked time on each task, not task assignment. A person appears here if they logged at least one time entry.
-          Bugs Rate / Return Rate average the QA labels over the person's labeled tasks — the (n) is how many tasks carry the label.
+          Totals per project over tasks with logged time. Bugs Rate / Return Rate are averages of the QA
+          labels across the project's labeled tasks — the (n) is how many tasks carry the label.
         </p>
       </div>
-      <DataTable data={rows} columns={columns} loading={loading} emptyText="No contributor data found." />
+      <DataTable data={rows} columns={columns} loading={loading} emptyText="No project data found." />
     </div>
   )
 }

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/components/DataTable'
 import { PeriodSwitcher } from '@/components/PeriodSwitcher'
+import { PersonQualityCards } from '@/components/PersonQualityCards'
 import { UnlinkedEmployeeBanner } from '@/components/UnlinkedEmployeeBanner'
 import { UtilizationDonut } from '@/components/UtilizationDonut'
 import { UtilizationSummaryCards } from '@/components/UtilizationSummaryCards'
@@ -63,7 +64,7 @@ const taskColumns: ColumnDef<ContributorTaskSummary>[] = [
   },
   {
     accessorKey: 'task_actual_hours',
-    header: 'Task actual',
+    header: 'Total Tracked',
     cell: ({ getValue }) => formatHours(Number(getValue())),
   },
   {
@@ -78,18 +79,6 @@ const taskColumns: ColumnDef<ContributorTaskSummary>[] = [
       const actual = Number(row.original.task_actual_hours)
       if (actual === 0) return '—'
       return formatRatio(Number(row.original.contributor_hours) / actual)
-    },
-  },
-  {
-    id: 'ratio',
-    header: 'Ratio',
-    cell: ({ row }) => {
-      const est = row.original.estimate_hours
-      const actual = Number(row.original.task_actual_hours)
-      if (est == null || est === 0) return '—'
-      const r = actual / est
-      const cls = r >= 2 ? 'text-red-600 font-medium' : r >= 1.5 ? 'text-amber-600' : ''
-      return <span className={cls}>{formatRatio(r)}</span>
     },
   },
   {
@@ -207,6 +196,8 @@ export function ContributorDetailPage() {
           )}
         </>
       )}
+
+      <PersonQualityCards tasks={tasks} />
 
       <section>
         <h3 className="mb-2 text-sm font-semibold text-neutral-900">

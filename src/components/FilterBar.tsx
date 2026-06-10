@@ -6,6 +6,10 @@ type Props = {
   value: Filters
   onChange: (next: Filters) => void
   hideDateRange?: boolean
+  /** Hide the Projects multi-select (People grid: people + period only) */
+  hideProjects?: boolean
+  /** Hide the Users multi-select (Projects grid: projects + period only) */
+  hideUsers?: boolean
   /** When set, only these project IDs appear in the Projects dropdown */
   scopedProjectIds?: number[]
 }
@@ -82,14 +86,14 @@ function SearchableMultiSelect<T extends { id: number }>({
   )
 }
 
-export function FilterBar({ value, onChange, hideDateRange, scopedProjectIds }: Props) {
+export function FilterBar({ value, onChange, hideDateRange, hideProjects, hideUsers, scopedProjectIds }: Props) {
   const [allProjects, setAllProjects] = useState<ProjectListItem[]>([])
   const [users, setUsers] = useState<UserListItem[]>([])
 
   useEffect(() => {
-    fetchProjects().then(setAllProjects).catch(() => setAllProjects([]))
-    fetchUsers().then(setUsers).catch(() => setUsers([]))
-  }, [])
+    if (!hideProjects) fetchProjects().then(setAllProjects).catch(() => setAllProjects([]))
+    if (!hideUsers) fetchUsers().then(setUsers).catch(() => setUsers([]))
+  }, [hideProjects, hideUsers])
 
   const projects = useMemo(() => {
     if (!scopedProjectIds) return allProjects
@@ -156,25 +160,29 @@ export function FilterBar({ value, onChange, hideDateRange, scopedProjectIds }: 
       </div>
 
       <div className="flex gap-3">
-        <SearchableMultiSelect
-          label="Projects"
-          summaryLabel={projectLabel}
-          items={projects}
-          selectedIds={value.projectIds}
-          onChange={(projectIds) => onChange({ ...value, projectIds })}
-          displayName={(p) => p.name}
-          searchPlaceholder="Search projects…"
-        />
+        {!hideProjects && (
+          <SearchableMultiSelect
+            label="Projects"
+            summaryLabel={projectLabel}
+            items={projects}
+            selectedIds={value.projectIds}
+            onChange={(projectIds) => onChange({ ...value, projectIds })}
+            displayName={(p) => p.name}
+            searchPlaceholder="Search projects…"
+          />
+        )}
 
-        <SearchableMultiSelect
-          label="Users"
-          summaryLabel={userLabel}
-          items={users}
-          selectedIds={value.userIds}
-          onChange={(userIds) => onChange({ ...value, userIds })}
-          displayName={(u) => u.display_name}
-          searchPlaceholder="Search users…"
-        />
+        {!hideUsers && (
+          <SearchableMultiSelect
+            label="Users"
+            summaryLabel={userLabel}
+            items={users}
+            selectedIds={value.userIds}
+            onChange={(userIds) => onChange({ ...value, userIds })}
+            displayName={(u) => u.display_name}
+            searchPlaceholder="Search users…"
+          />
+        )}
       </div>
     </div>
   )

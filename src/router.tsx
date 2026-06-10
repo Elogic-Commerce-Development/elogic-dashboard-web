@@ -4,16 +4,26 @@ import { DashboardPage } from '@/pages/DashboardPage'
 import { OverviewPage } from '@/pages/OverviewPage'
 import { EstimatesPage } from '@/pages/EstimatesPage'
 import { PeoplePage } from '@/pages/PeoplePage'
+import { ProjectsPage } from '@/pages/ProjectsPage'
 import { ProjectDetailPage } from '@/pages/ProjectDetailPage'
 import { ContributorDetailPage } from '@/pages/ContributorDetailPage'
 import { TaskDetailPage } from '@/pages/TaskDetailPage'
-import { isValidPreset, type PeriodPreset } from '@/lib/period'
+import { isValidPreset, isValidProjectPreset, type PeriodPreset } from '@/lib/period'
 import { isValidDashboardPeriodPreset, type DashboardPeriodPreset } from '@/lib/dashboardPeriod'
 
 export type ContributorDetailSearch = {
   // All optional so existing <Link to="/people/$userId"> call sites without
   // search params remain valid. Component defaults to 'current_month' when
   // preset is missing.
+  preset?: PeriodPreset
+  from?: string
+  to?: string
+}
+
+export type ProjectDetailSearch = {
+  // Mirrors ContributorDetailSearch (same optionality contract for existing
+  // <Link to="/projects/$projectId"> call sites). Additionally accepts the
+  // 'all_time' preset, which the person page does not.
   preset?: PeriodPreset
   from?: string
   to?: string
@@ -57,10 +67,24 @@ const peopleRoute = createRoute({
   component: PeoplePage,
 })
 
+const projectsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/projects',
+  component: ProjectsPage,
+})
+
 const projectDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/projects/$projectId',
   component: ProjectDetailPage,
+  validateSearch: (search: Record<string, unknown>): ProjectDetailSearch => {
+    const rawPreset = typeof search.preset === 'string' ? search.preset : undefined
+    return {
+      preset: isValidProjectPreset(rawPreset) ? rawPreset : undefined,
+      from: typeof search.from === 'string' ? search.from : undefined,
+      to: typeof search.to === 'string' ? search.to : undefined,
+    }
+  },
 })
 
 const contributorDetailRoute = createRoute({
@@ -88,6 +112,7 @@ const routeTree = rootRoute.addChildren([
   overviewRoute,
   estimatesRoute,
   peopleRoute,
+  projectsRoute,
   projectDetailRoute,
   contributorDetailRoute,
   taskDetailRoute,

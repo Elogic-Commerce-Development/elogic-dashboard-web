@@ -13,9 +13,17 @@ export type PeriodPreset =
   | 'previous_month'
   | 'current_year'
   | 'previous_year'
+  | 'all_time'
   | 'custom'
 
 export type PeriodRange = { from: string; to: string }
+
+/**
+ * Data floor — tasks are synced from this date on (AC_SYNC_FROM_DATE in the
+ * backend). Duplicated as a private const in dashboardPeriod.ts; the two
+ * period modules are deliberately independent.
+ */
+export const TRACKING_FLOOR = '2025-01-01'
 
 export const PERIOD_LABELS: Record<PeriodPreset, string> = {
   current_week: 'Current week',
@@ -24,6 +32,7 @@ export const PERIOD_LABELS: Record<PeriodPreset, string> = {
   previous_month: 'Previous month',
   current_year: 'Current year',
   previous_year: 'Previous year',
+  all_time: 'All time',
   custom: 'Custom',
 }
 
@@ -60,6 +69,10 @@ export function periodRange(
         to: `${lastYear}-12-31`,
       }
     }
+    case 'all_time':
+      // Range is informational (PeriodSwitcher label); pages treat the
+      // preset itself as "no period filter" rather than querying this span.
+      return { from: TRACKING_FLOOR, to: toIso(today) }
     case 'custom':
       return {
         from: customFrom ?? toIso(startOfMonth(today)),
@@ -70,7 +83,13 @@ export function periodRange(
 
 export function isValidPreset(value: string | undefined): value is PeriodPreset {
   if (value === undefined) return false
+  // Deliberately excludes 'all_time' — the person page keeps its original
+  // preset set; only the project page opts in via isValidProjectPreset.
   return ['current_week', 'last_week', 'current_month', 'previous_month', 'current_year', 'previous_year', 'custom'].includes(value)
+}
+
+export function isValidProjectPreset(value: string | undefined): value is PeriodPreset {
+  return isValidPreset(value) || value === 'all_time'
 }
 
 // All date math is in UTC to avoid client-timezone drift on the date boundary.

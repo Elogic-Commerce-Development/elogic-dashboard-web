@@ -6,14 +6,18 @@ type Props = {
   customFrom?: string
   customTo?: string
   onChange: (preset: PeriodPreset, customFrom?: string, customTo?: string) => void
+  /** Adds "All time" to the More-periods dropdown (project page only). */
+  includeAllTime?: boolean
 }
 
-const SECONDARY_PRESETS: PeriodPreset[] = ['previous_month', 'current_year', 'previous_year', 'custom']
-
-export function PeriodSwitcher({ preset, customFrom, customTo, onChange }: Props) {
+export function PeriodSwitcher({ preset, customFrom, customTo, onChange, includeAllTime }: Props) {
   const [showMore, setShowMore] = useState(false)
   const [editingFrom, setEditingFrom] = useState(customFrom ?? '')
   const [editingTo, setEditingTo] = useState(customTo ?? '')
+
+  const secondaryPresets: PeriodPreset[] = includeAllTime
+    ? ['previous_month', 'current_year', 'previous_year', 'all_time', 'custom']
+    : ['previous_month', 'current_year', 'previous_year', 'custom']
 
   const range = periodRange(preset, customFrom, customTo)
 
@@ -41,19 +45,19 @@ export function PeriodSwitcher({ preset, customFrom, customTo, onChange }: Props
             type="button"
             onClick={() => setShowMore((v) => !v)}
             className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
-              SECONDARY_PRESETS.includes(preset)
+              secondaryPresets.includes(preset)
                 ? 'border-blue-600 bg-blue-50 text-blue-700'
                 : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50'
             }`}
           >
-            {SECONDARY_PRESETS.includes(preset) ? PERIOD_LABELS[preset] : 'More periods'} ▾
+            {secondaryPresets.includes(preset) ? PERIOD_LABELS[preset] : 'More periods'} ▾
           </button>
           {showMore && (
             <div
               className="absolute right-0 z-10 mt-1 w-44 rounded-md border border-neutral-200 bg-white py-1 shadow-lg"
               onMouseLeave={() => setShowMore(false)}
             >
-              {SECONDARY_PRESETS.map((p) => (
+              {secondaryPresets.map((p) => (
                 <button
                   key={p}
                   type="button"
@@ -82,7 +86,7 @@ export function PeriodSwitcher({ preset, customFrom, customTo, onChange }: Props
 
         <span className="ml-auto text-xs text-neutral-500">
           {range.from} → {range.to}
-          {(preset === 'current_week' || preset === 'current_month' || preset === 'current_year') && (
+          {(preset === 'current_week' || preset === 'current_month' || preset === 'current_year' || preset === 'all_time') && (
             <span className="ml-1 text-neutral-400">(as of today)</span>
           )}
         </span>
