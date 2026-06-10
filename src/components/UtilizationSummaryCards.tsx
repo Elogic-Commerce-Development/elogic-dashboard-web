@@ -65,12 +65,6 @@ export function UtilizationSummaryCards({ summary }: Props) {
       secondary: `${summary.otherAbsenceDayCount} days · bench / other paid`,
       tone: summary.buckets.other_absence > 0 ? 'info' : 'neutral',
     },
-    {
-      label: 'WFH (informational)',
-      primary: `${summary.wfhDayCount}`,
-      secondary: 'days marked WFH',
-      tone: 'neutral',
-    },
   ]
 
   if (summary.overTrackedHours > 0) {

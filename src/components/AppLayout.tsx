@@ -13,6 +13,7 @@ const navItems = [
   { to: '/overview' as const, label: 'Overview' },
   { to: '/estimates' as const, label: 'Estimates' },
   { to: '/people' as const, label: 'People' },
+  { to: '/projects' as const, label: 'Projects' },
 ]
 
 export function AppLayout() {
@@ -28,6 +29,10 @@ export function AppLayout() {
   const isProjectDetail = /^\/projects\/[^/]+/.test(pathname)
   const isTaskDetail = /^\/tasks\/[^/]+/.test(pathname)
   const hideFilterBar = isDashboard || isContributorDetail || isProjectDetail || isTaskDetail
+  // The list grids each get only their own entity filter + the date range:
+  // /people filters by people, /projects by projects.
+  const isPeopleList = pathname === '/people'
+  const isProjectsList = pathname === '/projects'
 
   useEffect(() => {
     fetchOutsourcingProjectIds()
@@ -86,6 +91,8 @@ export function AppLayout() {
               value={filters}
               onChange={setFilters}
               hideDateRange={isDashboard}
+              hideProjects={isPeopleList}
+              hideUsers={isProjectsList}
               scopedProjectIds={isDashboard ? outsourcingProjectIds : undefined}
             />
           )}

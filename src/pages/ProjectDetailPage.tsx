@@ -1,96 +1,112 @@
 import { useEffect, useState, useMemo } from 'react'
-import { Link, useParams } from '@tanstack/react-router'
+import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
+import { Accordion } from '@/components/Accordion'
 import { DataTable } from '@/components/DataTable'
+import { PeriodSwitcher } from '@/components/PeriodSwitcher'
+import { QaRate } from '@/components/QaRate'
 import { supabase } from '@/lib/supabase'
-import type { TaskActualVsEstimate, RecentOverrun } from '@/lib/queries'
+import { fetchAllTasksFiltered, type TaskActualVsEstimate, type RecentOverrun } from '@/lib/queries'
+import { fetchProjectPeriodDetail, type ProjectContributorRow } from '@/lib/periodStats'
 import { formatHours, acProjectUrl, acTaskUrl } from '@/lib/format'
+import { periodRange, type PeriodPreset } from '@/lib/period'
 
 type ProjectInfo = { id: number; name: string; is_completed: boolean }
 type TaskFilter = 'all' | 'unestimated' | 'open-unestimated-active' | 'overrun' | 'open-overrun' | 'recent-overrun'
 
-const taskColumns: ColumnDef<TaskActualVsEstimate>[] = [
-  {
-    accessorKey: 'task_name',
-    header: 'Task',
-    cell: ({ row }) => (
-      <div className="flex items-center gap-1.5">
-        <Link
-          to="/tasks/$taskId"
-          params={{ taskId: String(row.original.task_id) }}
-          className="text-blue-600 hover:text-blue-800 hover:underline"
-        >
-          {row.original.task_name}
-        </Link>
-        <a
-          href={acTaskUrl(row.original.project_id, row.original.task_id)}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="shrink-0 text-neutral-400 hover:text-neutral-600"
-          title="Open in ActiveCollab"
-        >
-          <ExternalLinkIcon />
-        </a>
-      </div>
-    ),
-  },
-  {
-    accessorKey: 'assignee_name',
-    header: 'Assignee',
-    cell: ({ row }) => {
-      const id = row.original.assignee_id
-      const name = row.original.assignee_name
-      if (id == null || name == null) return '—'
-      return (
-        <Link
-          to="/people/$userId"
-          params={{ userId: String(id) }}
-          className="text-blue-600 hover:text-blue-800 hover:underline"
-        >
-          {name}
-        </Link>
-      )
+/**
+ * In period mode `period_hours` carries the hours logged within the range
+ * (shown in the Actual column); the lifetime fields stay untouched so the
+ * KPI cards, row highlighting, and Ratio/Overrun columns keep their
+ * all-time semantics.
+ */
+type ProjectTaskRow = TaskActualVsEstimate & { period_hours?: number }
+
+function makeTaskColumns(periodActive: boolean): ColumnDef<ProjectTaskRow>[] {
+  return [
+    {
+      accessorKey: 'task_name',
+      header: 'Task',
+      cell: ({ row }) => (
+        <div className="flex items-center gap-1.5">
+          <Link
+            to="/tasks/$taskId"
+            params={{ taskId: String(row.original.task_id) }}
+            className="text-blue-600 hover:text-blue-800 hover:underline"
+          >
+            {row.original.task_name}
+          </Link>
+          <a
+            href={acTaskUrl(row.original.project_id, row.original.task_id)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 text-neutral-400 hover:text-neutral-600"
+            title="Open in ActiveCollab"
+          >
+            <ExternalLinkIcon />
+          </a>
+        </div>
+      ),
     },
-  },
-  {
-    accessorKey: 'estimate_hours',
-    header: 'Estimate',
-    cell: ({ getValue }) => formatHours(getValue() as number | null),
-  },
-  {
-    accessorKey: 'actual_hours',
-    header: 'Actual',
-    cell: ({ getValue }) => formatHours(getValue() as number),
-  },
-  {
-    accessorKey: 'ratio',
-    header: 'Ratio',
-    cell: ({ row }) => {
-      const r = row.original.ratio != null ? Number(row.original.ratio) : null
-      if (r == null) return '—'
-      const pct = Math.round(r * 100)
-      const cls = r >= 2 ? 'text-red-600 font-semibold' : r >= 1.5 ? 'text-amber-600 font-medium' : ''
-      return <span className={cls}>{pct}%</span>
+    {
+      accessorKey: 'assignee_name',
+      header: 'Assignee',
+      cell: ({ row }) => {
+        const id = row.original.assignee_id
+        const name = row.original.assignee_name
+        if (id == null || name == null) return '—'
+        return (
+          <Link
+            to="/people/$userId"
+            params={{ userId: String(id) }}
+            className="text-blue-600 hover:text-blue-800 hover:underline"
+          >
+            {name}
+          </Link>
+        )
+      },
     },
-  },
-  {
-    id: 'overrun',
-    header: 'Overrun',
-    cell: ({ row }) => {
-      const est = row.original.estimate_hours != null ? Number(row.original.estimate_hours) : null
-      const act = Number(row.original.actual_hours)
-      if (est == null || est === 0) return '—'
-      const diff = act - est
-      if (diff <= 0) return <span className="text-emerald-600">—</span>
-      return <span className="font-medium text-red-600">+{formatHours(diff)}</span>
+    {
+      accessorKey: 'estimate_hours',
+      header: 'Estimate',
+      cell: ({ getValue }) => formatHours(getValue() as number | null),
     },
-  },
-  {
-    accessorKey: 'is_completed',
-    header: 'Status',
-    cell: ({ getValue }) => (getValue() ? 'Completed' : 'Open'),
-  },
-]
+    {
+      id: 'actual',
+      header: periodActive ? 'Actual (period)' : 'Actual',
+      accessorFn: (r) => (periodActive ? Number(r.period_hours ?? 0) : Number(r.actual_hours)),
+      cell: ({ getValue }) => formatHours(getValue() as number),
+    },
+    {
+      accessorKey: 'ratio',
+      header: periodActive ? 'Ratio (all-time)' : 'Ratio',
+      cell: ({ row }) => {
+        const r = row.original.ratio != null ? Number(row.original.ratio) : null
+        if (r == null) return '—'
+        const pct = Math.round(r * 100)
+        const cls = r >= 2 ? 'text-red-600 font-semibold' : r >= 1.5 ? 'text-amber-600 font-medium' : ''
+        return <span className={cls}>{pct}%</span>
+      },
+    },
+    {
+      id: 'overrun',
+      header: periodActive ? 'Overrun (all-time)' : 'Overrun',
+      cell: ({ row }) => {
+        const est = row.original.estimate_hours != null ? Number(row.original.estimate_hours) : null
+        const act = Number(row.original.actual_hours)
+        if (est == null || est === 0) return '—'
+        const diff = act - est
+        if (diff <= 0) return <span className="text-emerald-600">—</span>
+        return <span className="font-medium text-red-600">+{formatHours(diff)}</span>
+      },
+    },
+    {
+      accessorKey: 'is_completed',
+      header: 'Status',
+      cell: ({ getValue }) => (getValue() ? 'Completed' : 'Open'),
+    },
+  ]
+}
 
 function isOpenOverrun(t: TaskActualVsEstimate): boolean {
   return !t.is_completed && t.estimate_hours != null && Number(t.estimate_hours) > 0 && Number(t.actual_hours) > Number(t.estimate_hours)
@@ -108,6 +124,87 @@ function getTaskRowClassName(task: TaskActualVsEstimate): string {
     return 'bg-amber-50 border-t border-amber-100 hover:bg-amber-100'
   }
   return 'border-t border-neutral-100 hover:bg-neutral-50'
+}
+
+type ContribViewRow = {
+  contributor_id: number
+  contributor_name: string
+  contributor_hours: number
+  task_id: number
+  estimate_hours: number | null
+  task_actual_hours: number
+  qa_bugs: number | null
+  qa_iterations: number | null
+}
+
+/**
+ * All-time contributor rows for one project from v_contributor_task_summary,
+ * paginated past the 1000-row response cap (one row per (user, task)).
+ */
+async function fetchProjectContributorRows(pid: number): Promise<ContribViewRow[]> {
+  const PAGE = 1000
+  const all: ContribViewRow[] = []
+  for (let offset = 0; ; offset += PAGE) {
+    const { data, error } = await supabase
+      .from('v_contributor_task_summary')
+      .select('contributor_id, contributor_name, contributor_hours, task_id, estimate_hours, task_actual_hours, qa_bugs, qa_iterations')
+      .eq('project_id', pid)
+      .order('contributor_id')
+      .order('task_id')
+      .range(offset, offset + PAGE - 1)
+    if (error) throw error
+    const rows = (data ?? []) as ContribViewRow[]
+    all.push(...rows)
+    if (rows.length < PAGE) break
+  }
+  return all
+}
+
+function aggregateAllTimeContributors(rows: ContribViewRow[]): ProjectContributorRow[] {
+  type Acc = ProjectContributorRow & { bugsSum: number; iterSum: number }
+  const map = new Map<number, Acc>()
+  for (const r of rows) {
+    let acc = map.get(r.contributor_id)
+    if (!acc) {
+      acc = {
+        contributor_id: r.contributor_id,
+        contributor_name: r.contributor_name,
+        hours: 0,
+        tasks: 0,
+        overrun_tasks: 0,
+        hours_on_overrun: 0,
+        avg_qa_bugs: null,
+        qa_bugs_tasks: 0,
+        avg_qa_iterations: null,
+        qa_iterations_tasks: 0,
+        bugsSum: 0,
+        iterSum: 0,
+      }
+      map.set(r.contributor_id, acc)
+    }
+    const hours = Number(r.contributor_hours)
+    acc.hours += hours
+    acc.tasks += 1
+    if (r.estimate_hours != null && Number(r.task_actual_hours) > Number(r.estimate_hours)) {
+      acc.overrun_tasks += 1
+      acc.hours_on_overrun += hours
+    }
+    if (r.qa_bugs != null) {
+      acc.bugsSum += Number(r.qa_bugs)
+      acc.qa_bugs_tasks += 1
+    }
+    if (r.qa_iterations != null) {
+      acc.iterSum += Number(r.qa_iterations)
+      acc.qa_iterations_tasks += 1
+    }
+  }
+  return Array.from(map.values())
+    .map(({ bugsSum, iterSum, ...rest }) => ({
+      ...rest,
+      avg_qa_bugs: rest.qa_bugs_tasks > 0 ? bugsSum / rest.qa_bugs_tasks : null,
+      avg_qa_iterations: rest.qa_iterations_tasks > 0 ? iterSum / rest.qa_iterations_tasks : null,
+    }))
+    .sort((a, b) => b.hours - a.hours)
 }
 
 function KpiCard({
@@ -152,74 +249,82 @@ function KpiCard({
 
 export function ProjectDetailPage() {
   const { projectId } = useParams({ from: '/projects/$projectId' })
+  const search = useSearch({ from: '/projects/$projectId' })
+  const navigate = useNavigate()
   const pid = Number(projectId)
+
+  const activePreset: PeriodPreset = search.preset ?? 'current_month'
+  const isAllTime = activePreset === 'all_time'
+  const range = useMemo(
+    () => periodRange(activePreset, search.from, search.to),
+    [activePreset, search.from, search.to],
+  )
+  const rangeFrom = range.from
+  const rangeTo = range.to
+
   const [project, setProject] = useState<ProjectInfo | null>(null)
-  const [tasks, setTasks] = useState<TaskActualVsEstimate[]>([])
+  const [tasks, setTasks] = useState<ProjectTaskRow[]>([])
   const [recentOverruns, setRecentOverruns] = useState<RecentOverrun[]>([])
-  const [contributors, setContributors] = useState<{ contributor_id: number; contributor_name: string; hours: number; tasks: number }[]>([])
+  const [contributors, setContributors] = useState<ProjectContributorRow[]>([])
   const [loading, setLoading] = useState(true)
   const [taskFilter, setTaskFilter] = useState<TaskFilter>('all')
+  const [tasksOpen, setTasksOpen] = useState(false)
+  const [contributorsOpen, setContributorsOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
 
-    const loadProject = supabase
-      .from('projects')
-      .select('id, name, is_completed')
-      .eq('id', pid)
-      .maybeSingle()
+    async function load() {
+      const pRes = await supabase
+        .from('projects')
+        .select('id, name, is_completed')
+        .eq('id', pid)
+        .maybeSingle()
+      if (!cancelled && pRes.data) setProject(pRes.data as ProjectInfo)
 
-    const loadTasks = supabase
-      .from('v_task_actual_vs_estimate')
-      .select('*')
-      .eq('project_id', pid)
-      .order('created_on', { ascending: false })
-      .limit(500)
-
-    const loadContributors = supabase
-      .from('v_contributor_task_summary')
-      .select('contributor_id, contributor_name, contributor_hours, task_id')
-      .eq('project_id', pid)
-
-    const loadRecentOverruns = supabase
-      .from('v_recent_overrun_activity')
-      .select('*')
-      .eq('project_id', pid)
-
-    Promise.all([loadProject, loadTasks, loadContributors, loadRecentOverruns])
-      .then(([pRes, tRes, cRes, roRes]) => {
+      if (isAllTime) {
+        const [taskRows, contribRows, roRes] = await Promise.all([
+          fetchAllTasksFiltered([pid], []),
+          fetchProjectContributorRows(pid),
+          supabase.from('v_recent_overrun_activity').select('*').eq('project_id', pid),
+        ])
         if (cancelled) return
-        if (pRes.data) setProject(pRes.data as ProjectInfo)
-        setTasks((tRes.data ?? []) as TaskActualVsEstimate[])
+        setTasks(taskRows)
+        setContributors(aggregateAllTimeContributors(contribRows))
         setRecentOverruns((roRes.data ?? []) as RecentOverrun[])
+      } else {
+        const detail = await fetchProjectPeriodDetail(pid, rangeFrom, rangeTo)
+        if (cancelled) return
+        setTasks(detail.taskRows)
+        setContributors(detail.contributors)
+        setRecentOverruns([])
+      }
+    }
 
-        // Aggregate contributor rows
-        const map = new Map<number, { contributor_id: number; contributor_name: string; hours: number; tasks: Set<number> }>()
-        for (const r of (cRes.data ?? []) as { contributor_id: number; contributor_name: string; contributor_hours: number; task_id: number }[]) {
-          const existing = map.get(r.contributor_id)
-          if (existing) {
-            existing.hours += Number(r.contributor_hours)
-            existing.tasks.add(r.task_id)
-          } else {
-            map.set(r.contributor_id, { contributor_id: r.contributor_id, contributor_name: r.contributor_name, hours: Number(r.contributor_hours), tasks: new Set([r.task_id]) })
-          }
-        }
-        setContributors(
-          Array.from(map.values())
-            .map(({ tasks: taskSet, ...rest }) => ({ ...rest, tasks: taskSet.size }))
-            .sort((a, b) => b.hours - a.hours)
-        )
-      })
+    load()
       .catch(() => {})
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [pid])
+  }, [pid, isAllTime, rangeFrom, rangeTo])
 
-  // Reset filter when navigating to a different project
-  useEffect(() => { setTaskFilter('all') }, [pid])
+  // Reset the task filter when the project or the period changes (e.g. a
+  // dangling 'recent-overrun' filter after leaving all-time mode).
+  useEffect(() => { setTaskFilter('all') }, [pid, isAllTime, rangeFrom, rangeTo])
+
+  function setPeriod(preset: PeriodPreset, customFrom?: string, customTo?: string) {
+    navigate({
+      to: '/projects/$projectId',
+      params: { projectId: String(pid) },
+      search: () => ({
+        preset,
+        from: preset === 'custom' ? customFrom : undefined,
+        to: preset === 'custom' ? customTo : undefined,
+      }),
+    })
+  }
 
   const metrics = useMemo(() => {
     const totalWithoutEstimate = tasks.filter(t => t.estimate_hours == null).length
@@ -266,9 +371,16 @@ export function ProjectDetailPage() {
     }
   }, [tasks, taskFilter, recentOverrunTaskIds])
 
-  const toggleFilter = (f: TaskFilter) => setTaskFilter(prev => prev === f ? 'all' : f)
+  const taskColumns = useMemo(() => makeTaskColumns(!isAllTime), [isAllTime])
 
-  if (loading) {
+  // KPI clicks open the Tasks accordion — otherwise the filter they apply
+  // is invisible behind a collapsed section.
+  const toggleFilter = (f: TaskFilter) => {
+    setTaskFilter(prev => prev === f ? 'all' : f)
+    setTasksOpen(true)
+  }
+
+  if (loading && !project) {
     return <div className="py-12 text-center text-sm text-neutral-400">Loading project...</div>
   }
 
@@ -294,8 +406,16 @@ export function ProjectDetailPage() {
         )}
       </div>
 
+      <PeriodSwitcher
+        preset={activePreset}
+        customFrom={search.from}
+        customTo={search.to}
+        onChange={setPeriod}
+        includeAllTime
+      />
+
       {/* KPI cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className={`grid grid-cols-2 gap-3 sm:grid-cols-3 ${isAllTime ? 'lg:grid-cols-6' : 'lg:grid-cols-5'}`}>
         <KpiCard
           label="Tasks w/o estimates"
           value={String(metrics.totalWithoutEstimate)}
@@ -320,14 +440,16 @@ export function ProjectDetailPage() {
           active={taskFilter === 'overrun'}
           onClick={() => toggleFilter('overrun')}
         />
-        <KpiCard
-          label="Last 30d overrun"
-          value={formatHours(lastMonthMetrics.hours)}
-          sub={`${lastMonthMetrics.pct}% of estimates`}
-          color={lastMonthMetrics.hours > 0 ? 'red' : 'emerald'}
-          active={taskFilter === 'recent-overrun'}
-          onClick={() => toggleFilter('recent-overrun')}
-        />
+        {isAllTime && (
+          <KpiCard
+            label="Last 30d overrun"
+            value={formatHours(lastMonthMetrics.hours)}
+            sub={`${lastMonthMetrics.pct}% of estimates`}
+            color={lastMonthMetrics.hours > 0 ? 'red' : 'emerald'}
+            active={taskFilter === 'recent-overrun'}
+            onClick={() => toggleFilter('recent-overrun')}
+          />
+        )}
         <KpiCard
           label="Overrun tasks"
           value={`${metrics.overrunTaskCount}`}
@@ -337,14 +459,15 @@ export function ProjectDetailPage() {
           onClick={() => toggleFilter('open-overrun')}
         />
         <KpiCard
-          label="Total tasks"
+          label={isAllTime ? 'Total tasks' : 'Tasks in period'}
           value={String(tasks.length)}
           color={taskFilter !== 'all' ? 'blue' : 'neutral'}
-          onClick={() => setTaskFilter('all')}
+          onClick={() => { setTaskFilter('all'); setTasksOpen(true) }}
         />
       </div>
 
-      {/* Active filter indicator */}
+      {/* Active filter indicator — outside the accordion so it stays visible
+          even when the Tasks section is re-collapsed. */}
       {taskFilter !== 'all' && (
         <div className="flex items-center gap-2">
           <span className="text-xs text-neutral-500">
@@ -359,29 +482,43 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      <section>
-        <h3 className="mb-2 text-sm font-semibold text-neutral-900">
-          Tasks ({filteredTasks.length}{taskFilter !== 'all' ? ` of ${tasks.length}` : ''})
-        </h3>
+      <Accordion
+        title="Tasks"
+        meta={`${filteredTasks.length}${taskFilter !== 'all' ? ` of ${tasks.length}` : ''}${isAllTime ? '' : ' · in period'}`}
+        open={tasksOpen}
+        onToggle={() => setTasksOpen(v => !v)}
+      >
         <DataTable
           data={filteredTasks}
           columns={taskColumns}
-          loading={false}
-          emptyText="No tasks in this project."
+          loading={loading}
+          emptyText={isAllTime ? 'No tasks in this project.' : 'No tasks with logged time in this period.'}
           rowClassName={getTaskRowClassName}
         />
-      </section>
+      </Accordion>
 
-      {contributors.length > 0 && (
-        <section>
-          <h3 className="mb-2 text-sm font-semibold text-neutral-900">Contributors ({contributors.length})</h3>
-          <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm">
+      <Accordion
+        title="Contributors"
+        meta={`${contributors.length}${isAllTime ? '' : ' · in period'}`}
+        open={contributorsOpen}
+        onToggle={() => setContributorsOpen(v => !v)}
+      >
+        {contributors.length === 0 ? (
+          <div className="py-6 text-center text-sm text-neutral-400">
+            {isAllTime ? 'No tracked time in this project.' : 'No tracked time in this period.'}
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
             <table className="w-full text-sm">
               <thead className="border-b border-neutral-200 bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">
                 <tr>
                   <th className="px-4 py-2 font-medium">Name</th>
                   <th className="px-4 py-2 font-medium">Hours</th>
                   <th className="px-4 py-2 font-medium">Tasks</th>
+                  <th className="px-4 py-2 font-medium">Overrun</th>
+                  <th className="px-4 py-2 font-medium">Hours on overrun</th>
+                  <th className="px-4 py-2 font-medium">Bugs Rate</th>
+                  <th className="px-4 py-2 font-medium">Return Rate</th>
                 </tr>
               </thead>
               <tbody>
@@ -394,13 +531,23 @@ export function ProjectDetailPage() {
                     </td>
                     <td className="px-4 py-2">{formatHours(c.hours)}</td>
                     <td className="px-4 py-2">{c.tasks}</td>
+                    <td className="px-4 py-2">
+                      <span className={c.overrun_tasks > 0 ? 'text-red-600 font-medium' : ''}>{c.overrun_tasks}</span>
+                    </td>
+                    <td className="px-4 py-2">{formatHours(c.hours_on_overrun)}</td>
+                    <td className="px-4 py-2">
+                      <QaRate kind="bugs" value={c.avg_qa_bugs} sampleSize={c.qa_bugs_tasks} />
+                    </td>
+                    <td className="px-4 py-2">
+                      <QaRate kind="iterations" value={c.avg_qa_iterations} sampleSize={c.qa_iterations_tasks} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </section>
-      )}
+        )}
+      </Accordion>
     </div>
   )
 }

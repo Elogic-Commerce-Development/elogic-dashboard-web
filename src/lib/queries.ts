@@ -79,6 +79,28 @@ export type ContributorStats = {
   projects_contributed_to: number
   mean_ratio: number | null
   median_ratio: number | null
+  /** Bugs Rate: avg qa_bugs over the contributor's labeled tasks (null when none) */
+  avg_qa_bugs: number | null
+  qa_bugs_tasks: number
+  /** Return Rate: avg qa_iterations over the contributor's labeled tasks */
+  avg_qa_iterations: number | null
+  qa_iterations_tasks: number
+}
+
+export type ProjectStats = {
+  project_id: number
+  project_name: string
+  tasks_with_time: number
+  unestimated_tasks: number
+  overrun_tasks: number
+  total_hours: number
+  hours_on_unestimated: number
+  hours_on_overrun: number
+  team_members: number
+  avg_qa_bugs: number | null
+  qa_bugs_tasks: number
+  avg_qa_iterations: number | null
+  qa_iterations_tasks: number
 }
 
 export type ContributorTaskSummary = {
@@ -95,6 +117,10 @@ export type ContributorTaskSummary = {
   is_completed: boolean
   completed_on: string | null
   created_on: string
+  qa_iterations: number | null
+  qa_iterations_capped: boolean
+  qa_bugs: number | null
+  qa_bugs_capped: boolean
 }
 
 export type TaskContributor = {
@@ -336,13 +362,26 @@ export async function fetchGlobalKpis(): Promise<GlobalKpis | null> {
   return (data as GlobalKpis | null) ?? null
 }
 
-export async function fetchContributorStats(): Promise<ContributorStats[]> {
-  const { data, error } = await supabase
+export async function fetchContributorStats(userIds: number[] = []): Promise<ContributorStats[]> {
+  let q = supabase
     .from('v_contributor_stats')
     .select('*')
     .order('total_hours', { ascending: false })
+  if (userIds.length > 0) q = q.in('contributor_id', userIds)
+  const { data, error } = await q
   if (error) throw error
   return (data ?? []) as ContributorStats[]
+}
+
+export async function fetchProjectStats(projectIds: number[] = []): Promise<ProjectStats[]> {
+  let q = supabase
+    .from('v_project_stats')
+    .select('*')
+    .order('total_hours', { ascending: false })
+  if (projectIds.length > 0) q = q.in('project_id', projectIds)
+  const { data, error } = await q
+  if (error) throw error
+  return (data ?? []) as ProjectStats[]
 }
 
 export async function fetchContributorTaskSummary(
@@ -380,25 +419,37 @@ export async function fetchContributorTaskSummary(
       is_completed: boolean
       completed_on: string | null
       created_on: string
+      qa_iterations: number | null
+      qa_iterations_capped: boolean
+      qa_bugs: number | null
+      qa_bugs_capped: boolean
       project: { id: number; name: string } | null
     } | null
   }
 
   // Q1: this user's records in period with task + project embedded.
-  const { data: mine, error: mineErr } = await supabase
-    .from('time_records')
-    .select(
-      'task_id, value_hours, task:tasks(id, name, project_id, assignee_id, estimate_hours, is_completed, completed_on, created_on, project:projects(id, name))',
-    )
-    .eq('user_id', contributorId)
-    .eq('is_trashed', false)
-    .gte('record_date', from)
-    .lte('record_date', to)
-    .not('task_id', 'is', null)
-    .limit(10000)
-  if (mineErr) throw mineErr
-
-  const myRows = (mine ?? []) as unknown as RawRow[]
+  // PostgREST caps each response at 1000 rows regardless of .limit(), so
+  // walk pages (.order for stable pagination) until a short page.
+  const PAGE = 1000
+  const myRows: RawRow[] = []
+  for (let offset = 0; ; offset += PAGE) {
+    const { data: mine, error: mineErr } = await supabase
+      .from('time_records')
+      .select(
+        'task_id, value_hours, task:tasks(id, name, project_id, assignee_id, estimate_hours, is_completed, completed_on, created_on, qa_iterations, qa_iterations_capped, qa_bugs, qa_bugs_capped, project:projects(id, name))',
+      )
+      .eq('user_id', contributorId)
+      .eq('is_trashed', false)
+      .gte('record_date', from)
+      .lte('record_date', to)
+      .not('task_id', 'is', null)
+      .order('id')
+      .range(offset, offset + PAGE - 1)
+    if (mineErr) throw mineErr
+    const rows = (mine ?? []) as unknown as RawRow[]
+    myRows.push(...rows)
+    if (rows.length < PAGE) break
+  }
   if (myRows.length === 0) return []
 
   // Aggregate this user's hours per task and stash task metadata.
@@ -417,22 +468,30 @@ export async function fetchContributorTaskSummary(
   }
 
   // Q2: every user's hours on those tasks in the same period — for the
-  // "Task actual" + "Share" columns. Only one round-trip; values_hours is a
-  // numeric column so the payload is small.
+  // "Total Tracked" + "Share" columns. Chunk the .in() list (ids travel in
+  // the GET querystring) and page within each chunk past the 1000-row cap.
   const taskIds = Array.from(perTask.keys())
-  const { data: allRows, error: allErr } = await supabase
-    .from('time_records')
-    .select('task_id, value_hours')
-    .in('task_id', taskIds)
-    .eq('is_trashed', false)
-    .gte('record_date', from)
-    .lte('record_date', to)
-    .limit(50000)
-  if (allErr) throw allErr
-
   const taskTotals = new Map<number, number>()
-  for (const r of (allRows ?? []) as { task_id: number; value_hours: number }[]) {
-    taskTotals.set(r.task_id, (taskTotals.get(r.task_id) ?? 0) + Number(r.value_hours))
+  const CHUNK = 200
+  for (let i = 0; i < taskIds.length; i += CHUNK) {
+    const chunk = taskIds.slice(i, i + CHUNK)
+    for (let offset = 0; ; offset += PAGE) {
+      const { data: allRows, error: allErr } = await supabase
+        .from('time_records')
+        .select('task_id, value_hours')
+        .in('task_id', chunk)
+        .eq('is_trashed', false)
+        .gte('record_date', from)
+        .lte('record_date', to)
+        .order('id')
+        .range(offset, offset + PAGE - 1)
+      if (allErr) throw allErr
+      const rows = (allRows ?? []) as { task_id: number; value_hours: number }[]
+      for (const r of rows) {
+        taskTotals.set(r.task_id, (taskTotals.get(r.task_id) ?? 0) + Number(r.value_hours))
+      }
+      if (rows.length < PAGE) break
+    }
   }
 
   // We need the contributor's display name once. Look it up from any users
@@ -460,6 +519,10 @@ export async function fetchContributorTaskSummary(
       is_completed: task.is_completed,
       completed_on: task.completed_on,
       created_on: task.created_on,
+      qa_iterations: task.qa_iterations,
+      qa_iterations_capped: task.qa_iterations_capped,
+      qa_bugs: task.qa_bugs,
+      qa_bugs_capped: task.qa_bugs_capped,
     })
   }
   // Most recently created first (matches the all-time fetcher's order).
