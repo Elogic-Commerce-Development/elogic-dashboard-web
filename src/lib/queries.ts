@@ -1,6 +1,12 @@
 import { supabase } from './supabase'
 import type { Filters } from './filters'
 
+/**
+ * AC user `class` values we analyse on the People grid + Users filter.
+ * Everything else (Client, Client+, …) is dropped — they're not team members.
+ */
+export const TEAM_ROLES = ['Owner', 'Member']
+
 export type TaskWithoutEstimate = {
   id: number
   name: string
@@ -77,6 +83,10 @@ export type ContributorStats = {
   hours_on_overrun: number
   estimate_adoption: number | null
   projects_contributed_to: number
+  /** Distinct non-completed projects the person logged time on. */
+  active_projects_contributed_to: number
+  /** AC role discriminator (Owner / Member / Client …); People grid keeps Owner+Member. */
+  class: string | null
   mean_ratio: number | null
   median_ratio: number | null
   /** Bugs Rate: avg qa_bugs over the contributor's labeled tasks (null when none) */
@@ -101,6 +111,8 @@ export type ProjectStats = {
   qa_bugs_tasks: number
   avg_qa_iterations: number | null
   qa_iterations_tasks: number
+  /** Project completion flag — Projects grid defaults to active (false). */
+  is_completed: boolean
 }
 
 export type ContributorTaskSummary = {
@@ -164,8 +176,8 @@ export type RecentOverrun = {
   last_record_date: string
 }
 
-export type ProjectListItem = { id: number; name: string; label_id: number | null }
-export type UserListItem = { id: number; display_name: string }
+export type ProjectListItem = { id: number; name: string; label_id: number | null; is_completed: boolean }
+export type UserListItem = { id: number; display_name: string; class: string | null }
 
 export type UserDetail = {
   id: number
@@ -200,6 +212,23 @@ export type EmployeeDay = {
   tracked_hours: number
 }
 
+/**
+ * `created_on` is a timestamptz; a bare `lte <date>` stops at that day's
+ * 00:00 UTC and drops same-day tasks. Bump the To bound to end-of-day so the
+ * range is inclusive. (`record_date` is a DATE column and doesn't need this.)
+ */
+function createdOnTo(to: string): string {
+  return `${to}T23:59:59.999`
+}
+
+/** Continuous median, matching Postgres PERCENTILE_CONT(0.5). */
+function median(values: number[]): number | null {
+  if (values.length === 0) return null
+  const s = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(s.length / 2)
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2
+}
+
 export async function fetchTasksWithoutEstimates(filters: Filters): Promise<TaskWithoutEstimate[]> {
   let q = supabase
     .from('v_tasks_without_estimates')
@@ -210,11 +239,36 @@ export async function fetchTasksWithoutEstimates(filters: Filters): Promise<Task
   if (filters.projectIds.length > 0) q = q.in('project_id', filters.projectIds)
   if (filters.userIds.length > 0) q = q.in('assignee_id', filters.userIds)
   if (filters.from) q = q.gte('created_on', filters.from)
-  if (filters.to) q = q.lte('created_on', filters.to)
+  if (filters.to) q = q.lte('created_on', createdOnTo(filters.to))
 
   const { data, error } = await q
   if (error) throw error
   return (data ?? []) as TaskWithoutEstimate[]
+}
+
+/**
+ * Exact filtered row counts for the Overview accordion headers. Uses HEAD +
+ * count so it stays cheap and reflects the true total (not the 500-row display
+ * cap). Same filter chain as the two Overview tables.
+ */
+export async function fetchOverviewCounts(
+  filters: Filters,
+): Promise<{ withoutEstimates: number; overrun: number }> {
+  const countOf = async (view: string): Promise<number> => {
+    let q = supabase.from(view).select('*', { count: 'exact', head: true })
+    if (filters.projectIds.length > 0) q = q.in('project_id', filters.projectIds)
+    if (filters.userIds.length > 0) q = q.in('assignee_id', filters.userIds)
+    if (filters.from) q = q.gte('created_on', filters.from)
+    if (filters.to) q = q.lte('created_on', createdOnTo(filters.to))
+    const { count, error } = await q
+    if (error) throw error
+    return count ?? 0
+  }
+  const [withoutEstimates, overrun] = await Promise.all([
+    countOf('v_tasks_without_estimates'),
+    countOf('v_tasks_overrun'),
+  ])
+  return { withoutEstimates, overrun }
 }
 
 export async function fetchTasksOverrun(filters: Filters): Promise<TaskActualVsEstimate[]> {
@@ -227,7 +281,7 @@ export async function fetchTasksOverrun(filters: Filters): Promise<TaskActualVsE
   if (filters.projectIds.length > 0) q = q.in('project_id', filters.projectIds)
   if (filters.userIds.length > 0) q = q.in('assignee_id', filters.userIds)
   if (filters.from) q = q.gte('created_on', filters.from)
-  if (filters.to) q = q.lte('created_on', filters.to)
+  if (filters.to) q = q.lte('created_on', createdOnTo(filters.to))
 
   const { data, error } = await q
   if (error) throw error
@@ -270,7 +324,7 @@ export async function fetchActualVsEstimate(filters: Filters): Promise<TaskActua
   if (filters.projectIds.length > 0) q = q.in('project_id', filters.projectIds)
   if (filters.userIds.length > 0) q = q.in('assignee_id', filters.userIds)
   if (filters.from) q = q.gte('created_on', filters.from)
-  if (filters.to) q = q.lte('created_on', filters.to)
+  if (filters.to) q = q.lte('created_on', createdOnTo(filters.to))
 
   const { data, error } = await q
   if (error) throw error
@@ -291,16 +345,67 @@ export async function fetchAccuracyByUser(filters: Filters): Promise<EstimateAcc
 }
 
 export async function fetchAccuracyByProject(filters: Filters): Promise<EstimateAccuracyByProject[]> {
-  let q = supabase
-    .from('v_estimate_accuracy_by_project')
-    .select('*')
-    .order('estimated_tasks', { ascending: false })
+  // No date range → the all-time view.
+  if (!filters.from && !filters.to) {
+    let q = supabase
+      .from('v_estimate_accuracy_by_project')
+      .select('*')
+      .order('estimated_tasks', { ascending: false })
+    if (filters.projectIds.length > 0) q = q.in('project_id', filters.projectIds)
+    const { data, error } = await q
+    if (error) throw error
+    return (data ?? []) as EstimateAccuracyByProject[]
+  }
 
-  if (filters.projectIds.length > 0) q = q.in('project_id', filters.projectIds)
+  // Date range → recompute client-side over completed tasks created in the
+  // window, mirroring v_estimate_accuracy_by_project (completed tasks only,
+  // grouped by project, mean/median over non-null ratios). The all-time view
+  // can't be date-filtered, so walk v_task_actual_vs_estimate and aggregate.
+  type Row = { project_id: number; project_name: string; estimate_hours: number | null; ratio: number | null }
+  const rows: Row[] = []
+  const PAGE = 1000
+  for (let offset = 0; ; offset += PAGE) {
+    let q = supabase
+      .from('v_task_actual_vs_estimate')
+      .select('project_id, project_name, estimate_hours, ratio')
+      .eq('is_completed', true)
+      .order('task_id')
+      .range(offset, offset + PAGE - 1)
+    if (filters.projectIds.length > 0) q = q.in('project_id', filters.projectIds)
+    if (filters.from) q = q.gte('created_on', filters.from)
+    if (filters.to) q = q.lte('created_on', createdOnTo(filters.to))
+    const { data, error } = await q
+    if (error) throw error
+    const page = (data ?? []) as Row[]
+    rows.push(...page)
+    if (page.length < PAGE) break
+  }
 
-  const { data, error } = await q
-  if (error) throw error
-  return (data ?? []) as EstimateAccuracyByProject[]
+  type Acc = { project_name: string; total: number; estimated: number; ratios: number[] }
+  const byProject = new Map<number, Acc>()
+  for (const r of rows) {
+    let acc = byProject.get(r.project_id)
+    if (!acc) {
+      acc = { project_name: r.project_name, total: 0, estimated: 0, ratios: [] }
+      byProject.set(r.project_id, acc)
+    }
+    acc.total++
+    if (r.estimate_hours != null) acc.estimated++
+    if (r.ratio != null) acc.ratios.push(Number(r.ratio))
+  }
+
+  const result: EstimateAccuracyByProject[] = []
+  for (const [project_id, acc] of byProject.entries()) {
+    result.push({
+      project_id,
+      project_name: acc.project_name,
+      estimated_tasks: acc.estimated,
+      total_tasks: acc.total,
+      mean_ratio: acc.ratios.length ? acc.ratios.reduce((a, b) => a + b, 0) / acc.ratios.length : null,
+      median_ratio: median(acc.ratios),
+    })
+  }
+  return result.sort((a, b) => b.estimated_tasks - a.estimated_tasks)
 }
 
 export async function fetchSyncStatus(): Promise<SyncStatusRow | null> {
@@ -312,11 +417,39 @@ export async function fetchSyncStatus(): Promise<SyncStatusRow | null> {
 export async function fetchProjects(): Promise<ProjectListItem[]> {
   const { data, error } = await supabase
     .from('projects')
-    .select('id, name, label_id')
+    .select('id, name, label_id, is_completed')
     .eq('is_trashed', false)
     .order('name', { ascending: true })
   if (error) throw error
   return (data ?? []) as ProjectListItem[]
+}
+
+/** project_id → is_completed map for client-side active/completed filtering. */
+export async function fetchProjectCompletedMap(): Promise<Map<number, boolean>> {
+  const projects = await fetchProjects()
+  return new Map(projects.map((p) => [p.id, Boolean(p.is_completed)]))
+}
+
+/**
+ * user_id → class map for ALL users (no archive/role filter), so period-mode
+ * aggregation can drop non-team contributors the same way the all-time
+ * v_contributor_stats query does. Walks pages past the 1000-row cap.
+ */
+export async function fetchUserClassMap(): Promise<Map<number, string | null>> {
+  const map = new Map<number, string | null>()
+  const PAGE = 1000
+  for (let offset = 0; ; offset += PAGE) {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, class')
+      .order('id')
+      .range(offset, offset + PAGE - 1)
+    if (error) throw error
+    const rows = (data ?? []) as { id: number; class: string | null }[]
+    for (const r of rows) map.set(r.id, r.class)
+    if (rows.length < PAGE) break
+  }
+  return map
 }
 
 /**
@@ -349,8 +482,9 @@ export async function fetchOutsourcingProjectIds(): Promise<number[]> {
 export async function fetchUsers(): Promise<UserListItem[]> {
   const { data, error } = await supabase
     .from('users')
-    .select('id, display_name')
+    .select('id, display_name, class')
     .eq('is_archived', false)
+    .in('class', TEAM_ROLES) // drop Client/Client+ — not analysed
     .order('display_name', { ascending: true })
   if (error) throw error
   return (data ?? []) as UserListItem[]
@@ -366,6 +500,7 @@ export async function fetchContributorStats(userIds: number[] = []): Promise<Con
   let q = supabase
     .from('v_contributor_stats')
     .select('*')
+    .in('class', TEAM_ROLES) // People grid: Owner/Member only, drop Client/Client+
     .order('total_hours', { ascending: false })
   if (userIds.length > 0) q = q.in('contributor_id', userIds)
   const { data, error } = await q

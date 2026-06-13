@@ -22,6 +22,8 @@ function SearchableMultiSelect<T extends { id: number }>({
   onChange,
   displayName,
   searchPlaceholder,
+  search,
+  onSearchChange,
 }: {
   label: string
   summaryLabel: string
@@ -30,8 +32,10 @@ function SearchableMultiSelect<T extends { id: number }>({
   onChange: (ids: number[]) => void
   displayName: (item: T) => string
   searchPlaceholder: string
+  // Search text is owned by FilterBar so Clear can reset it (it survived before).
+  search: string
+  onSearchChange: (next: string) => void
 }) {
-  const [search, setSearch] = useState('')
   const lowerSearch = search.toLowerCase()
   const filtered = search
     ? items.filter((item) => displayName(item).toLowerCase().includes(lowerSearch))
@@ -53,7 +57,7 @@ function SearchableMultiSelect<T extends { id: number }>({
       <input
         type="text"
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        onChange={(e) => onSearchChange(e.target.value)}
         placeholder={searchPlaceholder}
         className="mb-1 w-full rounded-md border border-neutral-300 px-2 py-1 text-sm placeholder:text-neutral-400"
       />
@@ -89,11 +93,39 @@ function SearchableMultiSelect<T extends { id: number }>({
 export function FilterBar({ value, onChange, hideDateRange, hideProjects, hideUsers, scopedProjectIds }: Props) {
   const [allProjects, setAllProjects] = useState<ProjectListItem[]>([])
   const [users, setUsers] = useState<UserListItem[]>([])
+  const [projectSearch, setProjectSearch] = useState('')
+  const [userSearch, setUserSearch] = useState('')
+  // Raw date-input text, kept local so typing a year isn't fought by the
+  // controlled value; only complete, plausible dates are pushed to filters.
+  const [fromInput, setFromInput] = useState(value.from ?? '')
+  const [toInput, setToInput] = useState(value.to ?? '')
 
   useEffect(() => {
     if (!hideProjects) fetchProjects().then(setAllProjects).catch(() => setAllProjects([]))
     if (!hideUsers) fetchUsers().then(setUsers).catch(() => setUsers([]))
   }, [hideProjects, hideUsers])
+
+  // <input type="date"> fires onChange on every keystroke, so typing the year
+  // "2026" passes through complete-but-implausible dates (0002, 0020, 0202)
+  // that would filter out every task. Only commit a cleared field or a full
+  // date with a sane year so those intermediate states never hit a query.
+  function commitDate(field: 'from' | 'to', raw: string) {
+    if (raw === '') {
+      onChange({ ...value, [field]: undefined })
+      return
+    }
+    const year = Number(raw.slice(0, 4))
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || year < 2000 || year > 2100) return
+    onChange({ ...value, [field]: raw })
+  }
+
+  function clearAll() {
+    setProjectSearch('')
+    setUserSearch('')
+    setFromInput('')
+    setToInput('')
+    onChange({ from: undefined, to: undefined, projectIds: [], userIds: [] })
+  }
 
   const projects = useMemo(() => {
     if (!scopedProjectIds) return allProjects
@@ -122,7 +154,7 @@ export function FilterBar({ value, onChange, hideDateRange, hideProjects, hideUs
   const clearButton = (
     <button
       type="button"
-      onClick={() => onChange({ from: undefined, to: undefined, projectIds: [], userIds: [] })}
+      onClick={clearAll}
       className="shrink-0 rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
     >
       Clear
@@ -138,8 +170,11 @@ export function FilterBar({ value, onChange, hideDateRange, hideProjects, hideUs
               <label className="mb-1 block text-xs font-medium text-neutral-600">From</label>
               <input
                 type="date"
-                value={value.from ?? ''}
-                onChange={(e) => onChange({ ...value, from: e.target.value || undefined })}
+                value={fromInput}
+                onChange={(e) => {
+                  setFromInput(e.target.value)
+                  commitDate('from', e.target.value)
+                }}
                 className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
               />
             </div>
@@ -148,8 +183,11 @@ export function FilterBar({ value, onChange, hideDateRange, hideProjects, hideUs
               <label className="mb-1 block text-xs font-medium text-neutral-600">To</label>
               <input
                 type="date"
-                value={value.to ?? ''}
-                onChange={(e) => onChange({ ...value, to: e.target.value || undefined })}
+                value={toInput}
+                onChange={(e) => {
+                  setToInput(e.target.value)
+                  commitDate('to', e.target.value)
+                }}
                 className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
               />
             </div>
@@ -169,6 +207,8 @@ export function FilterBar({ value, onChange, hideDateRange, hideProjects, hideUs
             onChange={(projectIds) => onChange({ ...value, projectIds })}
             displayName={(p) => p.name}
             searchPlaceholder="Search projects…"
+            search={projectSearch}
+            onSearchChange={setProjectSearch}
           />
         )}
 
@@ -181,6 +221,8 @@ export function FilterBar({ value, onChange, hideDateRange, hideProjects, hideUs
             onChange={(userIds) => onChange({ ...value, userIds })}
             displayName={(u) => u.display_name}
             searchPlaceholder="Search users…"
+            search={userSearch}
+            onSearchChange={setUserSearch}
           />
         )}
       </div>

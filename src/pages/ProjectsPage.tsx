@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/components/DataTable'
@@ -29,12 +29,10 @@ const columns: ColumnDef<ProjectStats>[] = [
   },
   { accessorKey: 'tasks_with_time', header: 'Tasks' },
   {
-    accessorKey: 'unestimated_tasks',
-    header: 'Unestimated',
-    cell: ({ getValue }) => {
-      const v = getValue() as number
-      return <span className={v > 0 ? 'text-amber-600 font-medium' : ''}>{v}</span>
-    },
+    id: 'estimated_tasks',
+    header: 'Estimated',
+    accessorFn: (r) => r.tasks_with_time - r.unestimated_tasks,
+    cell: ({ getValue }) => getValue() as number,
   },
   {
     accessorKey: 'overrun_tasks',
@@ -76,6 +74,16 @@ export function ProjectsPage() {
   const { filters } = useFilters()
   const [rows, setRows] = useState<ProjectStats[]>([])
   const [loading, setLoading] = useState(false)
+  const [showCompleted, setShowCompleted] = useState(false)
+
+  // Default to active projects only; the toggle reveals completed ones. Works
+  // in both all-time (is_completed from v_project_stats) and period mode
+  // (is_completed set from the projects map in periodStats).
+  const visibleRows = useMemo(
+    () => (showCompleted ? rows : rows.filter((r) => !r.is_completed)),
+    [rows, showCompleted],
+  )
+  const completedCount = useMemo(() => rows.filter((r) => r.is_completed).length, [rows])
 
   // This page filters by projects + date range only; filters.userIds is
   // deliberately ignored (the Users select is hidden here).
@@ -105,14 +113,25 @@ export function ProjectsPage() {
 
   return (
     <div className="space-y-3">
-      <div>
-        <h2 className="text-sm font-semibold text-neutral-900">Projects (by time tracking)</h2>
-        <p className="text-xs text-neutral-500">
-          Totals per project over tasks with logged time. Bugs Rate / Return Rate are averages of the QA
-          labels across the project's labeled tasks — the (n) is how many tasks carry the label.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-sm font-semibold text-neutral-900">Projects (by time tracking)</h2>
+          <p className="text-xs text-neutral-500">
+            Totals per project over tasks with logged time. Bugs Rate / Return Rate are averages of the QA
+            labels across the project's labeled tasks — the (n) is how many tasks carry the label.
+          </p>
+        </div>
+        <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-neutral-600">
+          <input
+            type="checkbox"
+            checked={showCompleted}
+            onChange={(e) => setShowCompleted(e.target.checked)}
+            className="accent-blue-600"
+          />
+          Show completed{completedCount > 0 ? ` (${completedCount})` : ''}
+        </label>
       </div>
-      <DataTable data={rows} columns={columns} loading={loading} emptyText="No project data found." />
+      <DataTable data={visibleRows} columns={columns} loading={loading} emptyText="No project data found." />
     </div>
   )
 }
