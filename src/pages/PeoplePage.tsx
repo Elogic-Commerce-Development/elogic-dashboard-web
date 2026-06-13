@@ -29,12 +29,10 @@ const columns: ColumnDef<ContributorStats>[] = [
   },
   { accessorKey: 'tasks_contributed_to', header: 'Tasks' },
   {
-    accessorKey: 'unestimated_tasks',
-    header: 'Unestimated',
-    cell: ({ getValue }) => {
-      const v = getValue() as number
-      return <span className={v > 0 ? 'text-amber-600 font-medium' : ''}>{v}</span>
-    },
+    id: 'estimated_tasks',
+    header: 'Estimated',
+    accessorFn: (r) => r.tasks_contributed_to - r.unestimated_tasks,
+    cell: ({ getValue }) => getValue() as number,
   },
   {
     accessorKey: 'overrun_tasks',
@@ -69,7 +67,7 @@ const columns: ColumnDef<ContributorStats>[] = [
       />
     ),
   },
-  { accessorKey: 'projects_contributed_to', header: 'Projects' },
+  { accessorKey: 'active_projects_contributed_to', header: 'Projects' },
 ]
 
 export function PeoplePage() {

@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { TEAM_ROLES, fetchProjectCompletedMap, fetchUserClassMap } from './queries'
 import type { ContributorStats, ProjectStats, TaskActualVsEstimate } from './queries'
 
 /**
@@ -121,6 +122,7 @@ export function aggregateContributorStats(
   recs: PeriodTimeRecord[],
   meta: Map<number, TaskActualVsEstimate>,
   names: Map<number, string>,
+  opts?: { projectCompleted?: Map<number, boolean>; userClass?: Map<number, string | null> },
 ): ContributorStats[] {
   type Acc = { hours: number; perTaskHours: Map<number, number> }
   const byUser = new Map<number, Acc>()
@@ -173,6 +175,10 @@ export function aggregateContributorStats(
     }
 
     const tasks = acc.perTaskHours.size
+    let activeProjects = 0
+    for (const pid of projects) {
+      if (!(opts?.projectCompleted?.get(pid) ?? false)) activeProjects++
+    }
     rows.push({
       contributor_id: userId,
       contributor_name: names.get(userId) ?? `User #${userId}`,
@@ -184,6 +190,8 @@ export function aggregateContributorStats(
       hours_on_overrun: hoursOnOverrun,
       estimate_adoption: tasks > 0 ? estimated / tasks : null,
       projects_contributed_to: projects.size,
+      active_projects_contributed_to: activeProjects,
+      class: opts?.userClass?.get(userId) ?? null,
       // Ratio stats need completed-task filtering the grid no longer
       // displays — not recomputed in period mode.
       mean_ratio: null,
@@ -200,6 +208,7 @@ export function aggregateContributorStats(
 export function aggregateProjectStats(
   recs: PeriodTimeRecord[],
   meta: Map<number, TaskActualVsEstimate>,
+  projectCompleted?: Map<number, boolean>,
 ): ProjectStats[] {
   type Acc = {
     name: string
@@ -267,6 +276,7 @@ export function aggregateProjectStats(
       qa_bugs_tasks: bugsN,
       avg_qa_iterations: avgOrNull(iterSum, iterN),
       qa_iterations_tasks: iterN,
+      is_completed: projectCompleted?.get(projectId) ?? false,
     })
   }
   return rows.sort((a, b) => b.total_hours - a.total_hours)
@@ -304,15 +314,24 @@ async function fetchMetaAndNames(recs: PeriodTimeRecord[]): Promise<{
 export async function fetchContributorStatsForPeriod(scope: PeriodScope): Promise<ContributorStats[]> {
   const recs = await fetchPeriodTimeRecords(scope)
   if (recs.length === 0) return []
-  const { meta, names } = await fetchMetaAndNames(recs)
-  return aggregateContributorStats(recs, meta, names)
+  const [{ meta, names }, projectCompleted, userClass] = await Promise.all([
+    fetchMetaAndNames(recs),
+    fetchProjectCompletedMap(),
+    fetchUserClassMap(),
+  ])
+  const rows = aggregateContributorStats(recs, meta, names, { projectCompleted, userClass })
+  // People grid: Owner/Member only, matching the all-time v_contributor_stats query.
+  return rows.filter((r) => r.class != null && TEAM_ROLES.includes(r.class))
 }
 
 export async function fetchProjectStatsForPeriod(scope: PeriodScope): Promise<ProjectStats[]> {
   const recs = await fetchPeriodTimeRecords(scope)
   if (recs.length === 0) return []
-  const { meta } = await fetchMetaAndNames(recs)
-  return aggregateProjectStats(recs, meta)
+  const [{ meta }, projectCompleted] = await Promise.all([
+    fetchMetaAndNames(recs),
+    fetchProjectCompletedMap(),
+  ])
+  return aggregateProjectStats(recs, meta, projectCompleted)
 }
 
 export type ProjectPeriodDetail = {
