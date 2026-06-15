@@ -8,8 +8,9 @@ import {
   type TaskContributor,
   type TaskTimeEntry,
 } from '@/lib/queries'
-import { formatHours, formatRatio, formatQa, acTaskUrl, acProjectUrl } from '@/lib/format'
+import { formatHours, formatRatio, formatQa, externalTaskLink, externalProjectLink } from '@/lib/format'
 import { buildEmployeeColorMap } from '@/lib/contributorColors'
+import { SourceBadge } from '@/components/SourceBadge'
 import { TaskTimeBreakdown } from '@/components/TaskTimeBreakdown'
 import { TaskTimeEntries } from '@/components/TaskTimeEntries'
 
@@ -62,17 +63,30 @@ export function TaskDetailPage() {
     return <div className="py-12 text-center text-sm text-neutral-400">Task not found.</div>
   }
 
+  const taskLink = externalTaskLink({
+    source: task.source,
+    projectId: task.project_id,
+    taskId: task.task_id,
+    taskJiraKey: task.task_jira_key,
+  })
+  const projectLink = externalProjectLink({
+    source: task.source,
+    projectId: task.project_id,
+    projectJiraKey: task.project_jira_key,
+  })
+
   return (
     <div className="space-y-6">
       <div>
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-semibold text-neutral-900">{task.task_name}</h2>
+          <SourceBadge source={task.source} />
           <a
-            href={acTaskUrl(task.project_id, task.task_id)}
+            href={taskLink.url}
             target="_blank"
             rel="noopener noreferrer"
             className="text-neutral-400 hover:text-neutral-600"
-            title="Open in ActiveCollab"
+            title={taskLink.label}
           >
             <ExternalLinkIcon />
           </a>
@@ -91,10 +105,11 @@ export function TaskDetailPage() {
             {task.project_name}
           </Link>
           <a
-            href={acProjectUrl(task.project_id)}
+            href={projectLink.url}
             target="_blank"
             rel="noopener noreferrer"
             className="text-neutral-400 hover:text-neutral-600"
+            title={projectLink.label}
           >
             <ExternalLinkIcon />
           </a>

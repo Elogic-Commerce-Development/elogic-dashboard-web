@@ -8,10 +8,17 @@ import { QaRate } from '@/components/QaRate'
 import { supabase } from '@/lib/supabase'
 import { fetchAllTasksFiltered, type TaskActualVsEstimate, type RecentOverrun } from '@/lib/queries'
 import { fetchProjectPeriodDetail, type ProjectContributorRow } from '@/lib/periodStats'
-import { formatHours, acProjectUrl, acTaskUrl } from '@/lib/format'
+import { formatHours, externalProjectLink, externalTaskLink } from '@/lib/format'
 import { periodRange, type PeriodPreset } from '@/lib/period'
+import { SourceBadge } from '@/components/SourceBadge'
 
-type ProjectInfo = { id: number; name: string; is_completed: boolean }
+type ProjectInfo = {
+  id: number
+  name: string
+  is_completed: boolean
+  source: string | null
+  jira_key: string | null
+}
 type TaskFilter = 'all' | 'unestimated' | 'open-unestimated-active' | 'overrun' | 'open-overrun' | 'recent-overrun'
 
 /**
@@ -27,26 +34,35 @@ function makeTaskColumns(periodActive: boolean): ColumnDef<ProjectTaskRow>[] {
     {
       accessorKey: 'task_name',
       header: 'Task',
-      cell: ({ row }) => (
-        <div className="flex items-center gap-1.5">
-          <Link
-            to="/tasks/$taskId"
-            params={{ taskId: String(row.original.task_id) }}
-            className="text-blue-600 hover:text-blue-800 hover:underline"
-          >
-            {row.original.task_name}
-          </Link>
-          <a
-            href={acTaskUrl(row.original.project_id, row.original.task_id)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="shrink-0 text-neutral-400 hover:text-neutral-600"
-            title="Open in ActiveCollab"
-          >
-            <ExternalLinkIcon />
-          </a>
-        </div>
-      ),
+      cell: ({ row }) => {
+        const ext = externalTaskLink({
+          source: row.original.source,
+          projectId: row.original.project_id,
+          taskId: row.original.task_id,
+          taskJiraKey: row.original.task_jira_key,
+        })
+        return (
+          <div className="flex items-center gap-1.5">
+            <Link
+              to="/tasks/$taskId"
+              params={{ taskId: String(row.original.task_id) }}
+              className="text-blue-600 hover:text-blue-800 hover:underline"
+            >
+              {row.original.task_name}
+            </Link>
+            <SourceBadge source={row.original.source} />
+            <a
+              href={ext.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 text-neutral-400 hover:text-neutral-600"
+              title={ext.label}
+            >
+              <ExternalLinkIcon />
+            </a>
+          </div>
+        )
+      },
     },
     {
       accessorKey: 'assignee_name',
@@ -278,7 +294,7 @@ export function ProjectDetailPage() {
     async function load() {
       const pRes = await supabase
         .from('projects')
-        .select('id, name, is_completed')
+        .select('id, name, is_completed, source, jira_key')
         .eq('id', pid)
         .maybeSingle()
       if (!cancelled && pRes.data) setProject(pRes.data as ProjectInfo)
@@ -392,12 +408,21 @@ export function ProjectDetailPage() {
     <div className="space-y-6">
       <div className="flex items-center gap-3">
         <h2 className="text-lg font-semibold text-neutral-900">{project.name}</h2>
+        <SourceBadge source={project.source} />
         <a
-          href={acProjectUrl(project.id)}
+          href={externalProjectLink({
+            source: project.source,
+            projectId: project.id,
+            projectJiraKey: project.jira_key,
+          }).url}
           target="_blank"
           rel="noopener noreferrer"
           className="text-neutral-400 hover:text-neutral-600"
-          title="Open in ActiveCollab"
+          title={externalProjectLink({
+            source: project.source,
+            projectId: project.id,
+            projectJiraKey: project.jira_key,
+          }).label}
         >
           <ExternalLinkIcon />
         </a>

@@ -7,19 +7,23 @@ import { useFilters } from '@/lib/FilterContext'
 import { fetchProjectStats, type ProjectStats } from '@/lib/queries'
 import { fetchProjectStatsForPeriod } from '@/lib/periodStats'
 import { formatHours } from '@/lib/format'
+import { SourceBadge } from '@/components/SourceBadge'
 
 const columns: ColumnDef<ProjectStats>[] = [
   {
     accessorKey: 'project_name',
     header: 'Project Name',
     cell: ({ row }) => (
-      <Link
-        to="/projects/$projectId"
-        params={{ projectId: String(row.original.project_id) }}
-        className="font-medium text-blue-600 hover:text-blue-800 hover:underline"
-      >
-        {row.original.project_name}
-      </Link>
+      <div className="flex items-center gap-1.5">
+        <Link
+          to="/projects/$projectId"
+          params={{ projectId: String(row.original.project_id) }}
+          className="font-medium text-blue-600 hover:text-blue-800 hover:underline"
+        >
+          {row.original.project_name}
+        </Link>
+        <SourceBadge source={row.original.source} />
+      </div>
     ),
   },
   {
