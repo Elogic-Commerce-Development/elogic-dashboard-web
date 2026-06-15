@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import {
-  fetchMonthlyTrendFiltered,
-  fetchAllTasksFiltered,
+  fetchDashboardKpisMonthly,
+  fetchDashboardAccuracyMonthly,
+  fetchDashboardQualityMonthly,
+  fetchDashboardTrend,
+  fetchDashboardRecentOverruns,
+  fetchDashboardRecentUnestimated,
   type GlobalKpis,
   type RecentOverrun,
   type RecentUnestimated,
   type MonthlyTrend,
-  type TaskActualVsEstimate,
+  type DashboardKpiMonth,
+  type DashboardAccuracyMonth,
+  type DashboardQualityMonth,
 } from '@/lib/queries'
 import { formatHours, formatRatio, externalTaskLink } from '@/lib/format'
 import { SourceBadge } from '@/components/SourceBadge'
@@ -15,11 +21,12 @@ import { EstimationAdoptionChart } from '@/components/EstimationAdoptionChart'
 import { EstimateAccuracyChart } from '@/components/EstimateAccuracyChart'
 import { QualitySignalsSection } from '@/components/QualitySignalsSection'
 import { DashboardPeriodSwitcher } from '@/components/DashboardPeriodSwitcher'
-import { useFilters } from '@/lib/FilterContext'
 import {
   DEFAULT_DASHBOARD_PERIOD,
   dashboardPeriodRange,
+  enumerateMonths,
   type DashboardPeriodPreset,
+  type DashboardPeriodRange,
 } from '@/lib/dashboardPeriod'
 
 function KpiCard({
@@ -45,78 +52,37 @@ function KpiCard({
   )
 }
 
-function computeKpisFromTasks(tasks: TaskActualVsEstimate[]): GlobalKpis {
-  const unestimatedWithTime = tasks.filter(t => t.estimate_hours == null && Number(t.actual_hours) > 0)
-  const overrunTasks = tasks.filter(t =>
-    t.estimate_hours != null && Number(t.estimate_hours) > 0 && Number(t.actual_hours) > Number(t.estimate_hours)
-  )
+function sumKpiMonths(months: DashboardKpiMonth[], range: DashboardPeriodRange): GlobalKpis {
+  const inRange = new Set(enumerateMonths(range))
+  let total_tasks = 0
+  let estimated = 0
+  let total_hours = 0
+  let unestimated_tasks_with_time = 0
+  let unestimated_hours = 0
+  let overrun_tasks = 0
+  let overrun_hours = 0
+  for (const m of months) {
+    if (!inRange.has(m.month)) continue
+    total_tasks += Number(m.total_tasks)
+    estimated += Number(m.estimated_tasks)
+    total_hours += Number(m.total_hours)
+    unestimated_tasks_with_time += Number(m.unestimated_tasks_with_time)
+    unestimated_hours += Number(m.unestimated_hours)
+    overrun_tasks += Number(m.overrun_tasks)
+    overrun_hours += Number(m.overrun_hours)
+  }
   return {
-    unestimated_tasks_with_time: unestimatedWithTime.length,
-    unestimated_hours: unestimatedWithTime.reduce((s, t) => s + Number(t.actual_hours), 0),
-    overrun_tasks: overrunTasks.length,
-    overrun_hours: overrunTasks.reduce((s, t) => s + (Number(t.actual_hours) - Number(t.estimate_hours!)), 0),
-    estimate_adoption_rate: tasks.length > 0
-      ? tasks.filter(t => t.estimate_hours != null).length / tasks.length
-      : null,
-    total_tasks: tasks.length,
-    total_hours: tasks.reduce((s, t) => s + Number(t.actual_hours), 0),
+    unestimated_tasks_with_time,
+    unestimated_hours,
+    overrun_tasks,
+    overrun_hours,
+    estimate_adoption_rate: total_tasks > 0 ? estimated / total_tasks : null,
+    total_tasks,
+    total_hours,
   }
 }
 
-function computeShortlists(tasks: TaskActualVsEstimate[]) {
-  const cutoff = new Date()
-  cutoff.setDate(cutoff.getDate() - 30)
-  const cutoffStr = cutoff.toISOString().split('T')[0]
-
-  const overruns: RecentOverrun[] = tasks
-    .filter(t =>
-      t.estimate_hours != null && Number(t.estimate_hours) > 0 &&
-      Number(t.actual_hours) > Number(t.estimate_hours) &&
-      t.last_record_date && t.last_record_date >= cutoffStr
-    )
-    .sort((a, b) => Number(b.actual_hours) - Number(a.actual_hours))
-    .slice(0, 5)
-    .map(t => ({
-      task_id: t.task_id,
-      task_name: t.task_name,
-      project_id: t.project_id,
-      project_name: t.project_name,
-      estimate_hours: Number(t.estimate_hours!),
-      actual_hours: Number(t.actual_hours),
-      ratio: Number(t.ratio!),
-      recent_hours: Number(t.actual_hours),
-      last_record_date: t.last_record_date!,
-      source: t.source,
-      task_jira_key: t.task_jira_key,
-      project_jira_key: t.project_jira_key,
-    }))
-
-  const unestimated: RecentUnestimated[] = tasks
-    .filter(t =>
-      t.estimate_hours == null && !t.is_completed &&
-      Number(t.actual_hours) > 0 &&
-      t.last_record_date && t.last_record_date >= cutoffStr
-    )
-    .sort((a, b) => Number(b.actual_hours) - Number(a.actual_hours))
-    .slice(0, 5)
-    .map(t => ({
-      task_id: t.task_id,
-      task_name: t.task_name,
-      project_id: t.project_id,
-      project_name: t.project_name,
-      recent_hours: Number(t.actual_hours),
-      total_hours: Number(t.actual_hours),
-      last_record_date: t.last_record_date!,
-      source: t.source,
-      task_jira_key: t.task_jira_key,
-      project_jira_key: t.project_jira_key,
-    }))
-
-  return { overruns, unestimated }
-}
-
 export function DashboardPage() {
-  const { outsourcingProjectIds } = useFilters()
   const search = useSearch({ from: '/' })
   const navigate = useNavigate()
   const preset: DashboardPeriodPreset = search.period ?? DEFAULT_DASHBOARD_PERIOD
@@ -129,43 +95,47 @@ export function DashboardPage() {
     })
   }
 
-  const [tasks, setTasks] = useState<TaskActualVsEstimate[]>([])
+  const [kpiMonths, setKpiMonths] = useState<DashboardKpiMonth[]>([])
+  const [accuracyMonths, setAccuracyMonths] = useState<DashboardAccuracyMonth[]>([])
+  const [qualityMonths, setQualityMonths] = useState<DashboardQualityMonth[]>([])
   const [trend, setTrend] = useState<MonthlyTrend[]>([])
+  const [topOverruns, setTopOverruns] = useState<RecentOverrun[]>([])
+  const [topUnestimated, setTopUnestimated] = useState<RecentUnestimated[]>([])
   const [loading, setLoading] = useState(true)
 
+  // Scope (outsourcing ∪ jira) is baked into the v_dashboard_* views, so the
+  // dashboard fetches a few dozen pre-aggregated rows once on mount. The period
+  // switcher filters these client-side — no refetch.
   useEffect(() => {
-    // Wait until outsourcing scope is loaded
-    if (outsourcingProjectIds.length === 0) return
-
     let cancelled = false
     setLoading(true)
-
-    fetchAllTasksFiltered(outsourcingProjectIds, [])
-      .then(async (rows) => {
+    Promise.all([
+      fetchDashboardKpisMonthly(),
+      fetchDashboardAccuracyMonthly(),
+      fetchDashboardQualityMonthly(),
+      fetchDashboardTrend(),
+      fetchDashboardRecentOverruns(),
+      fetchDashboardRecentUnestimated(),
+    ])
+      .then(([kpi, accuracy, quality, t, overruns, unestimated]) => {
         if (cancelled) return
-        setTasks(rows)
-        const t = await fetchMonthlyTrendFiltered(outsourcingProjectIds, [], rows)
-        if (!cancelled) setTrend(t)
+        setKpiMonths(kpi)
+        setAccuracyMonths(accuracy)
+        setQualityMonths(quality)
+        setTrend(t)
+        setTopOverruns(overruns)
+        setTopUnestimated(unestimated)
       })
       .catch(() => {})
-      .finally(() => { if (!cancelled) setLoading(false) })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
-    return () => { cancelled = true }
-  }, [outsourcingProjectIds])
-
-  const tasksInPeriod = useMemo(
-    () => tasks.filter((t) => t.created_on >= range.from && t.created_on <= `${range.to}T23:59:59Z`),
-    [tasks, range],
-  )
-
-  const kpis = useMemo<GlobalKpis>(
-    () => computeKpisFromTasks(tasksInPeriod),
-    [tasksInPeriod],
-  )
-  const { overruns: topOverruns, unestimated: topUnestimated } = useMemo(
-    () => computeShortlists(tasks),
-    [tasks],
-  )
+  const kpis = useMemo<GlobalKpis>(() => sumKpiMonths(kpiMonths, range), [kpiMonths, range])
 
   if (loading) {
     return <div className="py-12 text-center text-sm text-neutral-400">Loading dashboard...</div>
@@ -214,10 +184,10 @@ export function DashboardPage() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <EstimationAdoptionChart data={trend} range={range} />
-        <EstimateAccuracyChart tasks={tasks} range={range} />
+        <EstimateAccuracyChart data={accuracyMonths} range={range} />
       </div>
 
-      <QualitySignalsSection tasks={tasks} range={range} />
+      <QualitySignalsSection data={qualityMonths} range={range} />
 
       <div className="grid gap-6 lg:grid-cols-2">
         <ShortlistCard

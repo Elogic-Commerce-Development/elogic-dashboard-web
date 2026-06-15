@@ -12,8 +12,7 @@ import {
   ReferenceLine,
   type TooltipContentProps,
 } from 'recharts'
-import type { TaskActualVsEstimate } from '@/lib/queries'
-import { median, percentile } from '@/lib/stats'
+import type { DashboardQualityMonth } from '@/lib/queries'
 import { enumerateMonths, type DashboardPeriodRange } from '@/lib/dashboardPeriod'
 
 const CAP_NOTE =
@@ -36,35 +35,31 @@ function formatMonthLabel(monthIso: string): string {
 }
 
 function buildBuckets(
-  tasks: TaskActualVsEstimate[],
+  data: DashboardQualityMonth[],
   range: DashboardPeriodRange,
-  pick: (t: TaskActualVsEstimate) => { value: number; capped: boolean } | null,
+  pick: (d: DashboardQualityMonth) => {
+    median: number | null
+    p25: number | null
+    p75: number | null
+    sample_size: number
+    any_capped: boolean
+  },
 ): MonthBucket[] {
-  const months = enumerateMonths(range)
-  const byMonth = new Map<string, { values: number[]; capped: boolean }>()
-  for (const m of months) byMonth.set(m, { values: [], capped: false })
+  const byMonth = new Map(data.map((d) => [d.month, d]))
 
-  for (const t of tasks) {
-    if (!t.is_completed || !t.completed_on) continue
-    const v = pick(t)
-    if (v == null) continue
-    const key = t.completed_on.slice(0, 7) + '-01'
-    const bucket = byMonth.get(key)
-    if (!bucket) continue
-    bucket.values.push(v.value)
-    if (v.capped) bucket.capped = true
-  }
-
-  const withMedians = months.map((m) => {
-    const { values, capped } = byMonth.get(m) ?? { values: [], capped: false }
+  const withMedians = enumerateMonths(range).map((m) => {
+    const row = byMonth.get(m)
+    const v = row
+      ? pick(row)
+      : { median: null, p25: null, p75: null, sample_size: 0, any_capped: false }
     return {
       month: m,
       label: formatMonthLabel(m),
-      median: median(values),
-      p25: percentile(values, 0.25),
-      p75: percentile(values, 0.75),
-      sample_size: values.length,
-      any_capped: capped,
+      median: v.median != null ? Number(v.median) : null,
+      p25: v.p25 != null ? Number(v.p25) : null,
+      p75: v.p75 != null ? Number(v.p75) : null,
+      sample_size: Number(v.sample_size),
+      any_capped: v.any_capped,
     }
   })
 
@@ -222,30 +217,36 @@ function QaCard({
 }
 
 export function QualitySignalsSection({
-  tasks,
+  data,
   range,
 }: {
-  tasks: TaskActualVsEstimate[]
+  data: DashboardQualityMonth[]
   range: DashboardPeriodRange
 }) {
   const [expanded, setExpanded] = useState(false)
 
   const iterations = useMemo(
     () =>
-      buildBuckets(tasks, range, (t) =>
-        t.qa_iterations != null
-          ? { value: Number(t.qa_iterations), capped: t.qa_iterations_capped }
-          : null,
-      ),
-    [tasks, range],
+      buildBuckets(data, range, (d) => ({
+        median: d.iter_median,
+        p25: d.iter_p25,
+        p75: d.iter_p75,
+        sample_size: d.iter_sample_size,
+        any_capped: d.iter_any_capped,
+      })),
+    [data, range],
   )
 
   const bugs = useMemo(
     () =>
-      buildBuckets(tasks, range, (t) =>
-        t.qa_bugs != null ? { value: Number(t.qa_bugs), capped: t.qa_bugs_capped } : null,
-      ),
-    [tasks, range],
+      buildBuckets(data, range, (d) => ({
+        median: d.bug_median,
+        p25: d.bug_p25,
+        p75: d.bug_p75,
+        sample_size: d.bug_sample_size,
+        any_capped: d.bug_any_capped,
+      })),
+    [data, range],
   )
 
   return (
