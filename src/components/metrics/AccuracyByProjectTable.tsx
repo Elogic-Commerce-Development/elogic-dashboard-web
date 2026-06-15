@@ -5,19 +5,23 @@ import { DataTable } from '../DataTable'
 import type { Filters } from '@/lib/filters'
 import { fetchAccuracyByProject, type EstimateAccuracyByProject } from '@/lib/queries'
 import { formatRatio } from '@/lib/format'
+import { SourceBadge } from '../SourceBadge'
 
 const columns: ColumnDef<EstimateAccuracyByProject>[] = [
   {
     accessorKey: 'project_name',
     header: 'Project',
     cell: ({ row }) => (
-      <Link
-        to="/projects/$projectId"
-        params={{ projectId: String(row.original.project_id) }}
-        className="text-neutral-700 hover:text-blue-600 hover:underline"
-      >
-        {row.original.project_name}
-      </Link>
+      <div className="flex items-center gap-1.5">
+        <Link
+          to="/projects/$projectId"
+          params={{ projectId: String(row.original.project_id) }}
+          className="text-neutral-700 hover:text-blue-600 hover:underline"
+        >
+          {row.original.project_name}
+        </Link>
+        <SourceBadge source={row.original.source} />
+      </div>
     ),
   },
   { accessorKey: 'total_tasks', header: 'Total tasks' },

@@ -16,6 +16,9 @@ export type TaskWithoutEstimate = {
   assignee_name: string | null
   created_on: string
   due_on: string | null
+  source: string | null
+  task_jira_key: string | null
+  project_jira_key: string | null
 }
 
 export type TaskActualVsEstimate = {
@@ -36,6 +39,9 @@ export type TaskActualVsEstimate = {
   qa_iterations_capped: boolean
   qa_bugs: number | null
   qa_bugs_capped: boolean
+  source: string | null
+  task_jira_key: string | null
+  project_jira_key: string | null
 }
 
 export type EstimateAccuracyByUser = {
@@ -54,6 +60,8 @@ export type EstimateAccuracyByProject = {
   total_tasks: number
   mean_ratio: number | null
   median_ratio: number | null
+  source: string | null
+  project_jira_key: string | null
 }
 
 export type SyncStatusRow = {
@@ -113,6 +121,8 @@ export type ProjectStats = {
   qa_iterations_tasks: number
   /** Project completion flag — Projects grid defaults to active (false). */
   is_completed: boolean
+  source: string | null
+  jira_key: string | null
 }
 
 export type ContributorTaskSummary = {
@@ -133,6 +143,9 @@ export type ContributorTaskSummary = {
   qa_iterations_capped: boolean
   qa_bugs: number | null
   qa_bugs_capped: boolean
+  source: string | null
+  task_jira_key: string | null
+  project_jira_key: string | null
 }
 
 export type TaskContributor = {
@@ -162,6 +175,9 @@ export type RecentUnestimated = {
   recent_hours: number
   total_hours: number
   last_record_date: string
+  source: string | null
+  task_jira_key: string | null
+  project_jira_key: string | null
 }
 
 export type RecentOverrun = {
@@ -174,6 +190,9 @@ export type RecentOverrun = {
   ratio: number
   recent_hours: number
   last_record_date: string
+  source: string | null
+  task_jira_key: string | null
+  project_jira_key: string | null
 }
 
 export type ProjectListItem = { id: number; name: string; label_id: number | null; is_completed: boolean }
@@ -361,13 +380,13 @@ export async function fetchAccuracyByProject(filters: Filters): Promise<Estimate
   // window, mirroring v_estimate_accuracy_by_project (completed tasks only,
   // grouped by project, mean/median over non-null ratios). The all-time view
   // can't be date-filtered, so walk v_task_actual_vs_estimate and aggregate.
-  type Row = { project_id: number; project_name: string; estimate_hours: number | null; ratio: number | null }
+  type Row = { project_id: number; project_name: string; estimate_hours: number | null; ratio: number | null; source: string | null; project_jira_key: string | null }
   const rows: Row[] = []
   const PAGE = 1000
   for (let offset = 0; ; offset += PAGE) {
     let q = supabase
       .from('v_task_actual_vs_estimate')
-      .select('project_id, project_name, estimate_hours, ratio')
+      .select('project_id, project_name, estimate_hours, ratio, source, project_jira_key')
       .eq('is_completed', true)
       .order('task_id')
       .range(offset, offset + PAGE - 1)
@@ -381,12 +400,12 @@ export async function fetchAccuracyByProject(filters: Filters): Promise<Estimate
     if (page.length < PAGE) break
   }
 
-  type Acc = { project_name: string; total: number; estimated: number; ratios: number[] }
+  type Acc = { project_name: string; total: number; estimated: number; ratios: number[]; source: string | null; project_jira_key: string | null }
   const byProject = new Map<number, Acc>()
   for (const r of rows) {
     let acc = byProject.get(r.project_id)
     if (!acc) {
-      acc = { project_name: r.project_name, total: 0, estimated: 0, ratios: [] }
+      acc = { project_name: r.project_name, total: 0, estimated: 0, ratios: [], source: r.source, project_jira_key: r.project_jira_key }
       byProject.set(r.project_id, acc)
     }
     acc.total++
@@ -403,6 +422,8 @@ export async function fetchAccuracyByProject(filters: Filters): Promise<Estimate
       total_tasks: acc.total,
       mean_ratio: acc.ratios.length ? acc.ratios.reduce((a, b) => a + b, 0) / acc.ratios.length : null,
       median_ratio: median(acc.ratios),
+      source: acc.source,
+      project_jira_key: acc.project_jira_key,
     })
   }
   return result.sort((a, b) => b.estimated_tasks - a.estimated_tasks)
@@ -477,6 +498,20 @@ export async function fetchOutsourcingProjectIds(): Promise<number[]> {
     .eq('is_trashed', false)
   if (projErr) throw projErr
   return (projects ?? []).map((p) => p.id)
+}
+
+/**
+ * IDs of the Jira-sourced projects (PSP). Unioned with the outsourcing scope so
+ * PSP appears on the dashboard the same way AC outsourcing projects do.
+ */
+export async function fetchJiraProjectIds(): Promise<number[]> {
+  const { data, error } = await supabase
+    .from('projects')
+    .select('id')
+    .eq('source', 'jira')
+    .eq('is_trashed', false)
+  if (error) throw error
+  return (data ?? []).map((p) => p.id)
 }
 
 export async function fetchUsers(): Promise<UserListItem[]> {
@@ -558,7 +593,9 @@ export async function fetchContributorTaskSummary(
       qa_iterations_capped: boolean
       qa_bugs: number | null
       qa_bugs_capped: boolean
-      project: { id: number; name: string } | null
+      source: string | null
+      jira_key: string | null
+      project: { id: number; name: string; jira_key: string | null } | null
     } | null
   }
 
@@ -571,7 +608,7 @@ export async function fetchContributorTaskSummary(
     const { data: mine, error: mineErr } = await supabase
       .from('time_records')
       .select(
-        'task_id, value_hours, task:tasks(id, name, project_id, assignee_id, estimate_hours, is_completed, completed_on, created_on, qa_iterations, qa_iterations_capped, qa_bugs, qa_bugs_capped, project:projects(id, name))',
+        'task_id, value_hours, task:tasks(id, name, project_id, assignee_id, estimate_hours, is_completed, completed_on, created_on, qa_iterations, qa_iterations_capped, qa_bugs, qa_bugs_capped, source, jira_key, project:projects(id, name, jira_key))',
       )
       .eq('user_id', contributorId)
       .eq('is_trashed', false)
@@ -658,6 +695,9 @@ export async function fetchContributorTaskSummary(
       qa_iterations_capped: task.qa_iterations_capped,
       qa_bugs: task.qa_bugs,
       qa_bugs_capped: task.qa_bugs_capped,
+      source: task.source,
+      task_jira_key: task.jira_key,
+      project_jira_key: task.project?.jira_key ?? null,
     })
   }
   // Most recently created first (matches the all-time fetcher's order).

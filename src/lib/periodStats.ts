@@ -215,6 +215,8 @@ export function aggregateProjectStats(
     hours: number
     perTaskHours: Map<number, number>
     users: Set<number>
+    source: string | null
+    jira_key: string | null
   }
   const byProject = new Map<number, Acc>()
   for (const r of recs) {
@@ -222,7 +224,7 @@ export function aggregateProjectStats(
     if (!m) continue
     let acc = byProject.get(m.project_id)
     if (!acc) {
-      acc = { name: m.project_name, hours: 0, perTaskHours: new Map(), users: new Set() }
+      acc = { name: m.project_name, hours: 0, perTaskHours: new Map(), users: new Set(), source: m.source, jira_key: m.project_jira_key }
       byProject.set(m.project_id, acc)
     }
     const h = Number(r.value_hours)
@@ -272,6 +274,8 @@ export function aggregateProjectStats(
       hours_on_unestimated: hoursOnUnestimated,
       hours_on_overrun: hoursOnOverrun,
       team_members: acc.users.size,
+      source: acc.source,
+      jira_key: acc.jira_key,
       avg_qa_bugs: avgOrNull(bugsSum, bugsN),
       qa_bugs_tasks: bugsN,
       avg_qa_iterations: avgOrNull(iterSum, iterN),
