@@ -3,7 +3,7 @@ import { Outlet, Link, useRouterState } from '@tanstack/react-router'
 import { supabase } from '@/lib/supabase'
 import { defaultFilters, type Filters } from '@/lib/filters'
 import { FilterContext } from '@/lib/FilterContext'
-import { fetchOutsourcingProjectIds } from '@/lib/queries'
+import { fetchJiraProjectIds, fetchOutsourcingProjectIds } from '@/lib/queries'
 import { FilterBar } from './FilterBar'
 import { SyncStatusBadge } from './SyncStatusBadge'
 import { TrackingSinceBanner } from './TrackingSinceBanner'
@@ -18,6 +18,7 @@ const navItems = [
 
 export function AppLayout() {
   const [filters, setFilters] = useState<Filters>(defaultFilters)
+  // Dashboard scope = AC "OUTSOURCING PROJECT" ids ∪ Jira (PSP) project ids.
   const [outsourcingProjectIds, setOutsourcingProjectIds] = useState<number[]>([])
   const routerState = useRouterState()
   const pathname = routerState.location.pathname
@@ -35,8 +36,8 @@ export function AppLayout() {
   const isProjectsList = pathname === '/projects'
 
   useEffect(() => {
-    fetchOutsourcingProjectIds()
-      .then(setOutsourcingProjectIds)
+    Promise.all([fetchOutsourcingProjectIds(), fetchJiraProjectIds()])
+      .then(([ac, jira]) => setOutsourcingProjectIds([...new Set([...ac, ...jira])]))
       .catch(() => setOutsourcingProjectIds([]))
   }, [])
 

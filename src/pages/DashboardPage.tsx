@@ -85,6 +85,9 @@ function computeShortlists(tasks: TaskActualVsEstimate[]) {
       ratio: Number(t.ratio!),
       recent_hours: Number(t.actual_hours),
       last_record_date: t.last_record_date!,
+      source: t.source,
+      task_jira_key: t.task_jira_key,
+      project_jira_key: t.project_jira_key,
     }))
 
   const unestimated: RecentUnestimated[] = tasks
@@ -103,6 +106,9 @@ function computeShortlists(tasks: TaskActualVsEstimate[]) {
       recent_hours: Number(t.actual_hours),
       total_hours: Number(t.actual_hours),
       last_record_date: t.last_record_date!,
+      source: t.source,
+      task_jira_key: t.task_jira_key,
+      project_jira_key: t.project_jira_key,
     }))
 
   return { overruns, unestimated }
