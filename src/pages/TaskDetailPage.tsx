@@ -24,25 +24,31 @@ export function TaskDetailPage() {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
 
-    const loadTask = supabase
-      .from('v_task_actual_vs_estimate')
-      .select('*')
-      .eq('task_id', tid)
-      .maybeSingle()
-
-    Promise.all([loadTask, fetchTaskContributors(tid), fetchTaskTimeRecordEntries(tid)])
-      .then(([tRes, contribs, ents]) => {
+    async function load() {
+      setLoading(true)
+      const loadTask = supabase
+        .from('v_task_actual_vs_estimate')
+        .select('*')
+        .eq('task_id', tid)
+        .maybeSingle()
+      try {
+        const [tRes, contribs, ents] = await Promise.all([
+          loadTask,
+          fetchTaskContributors(tid),
+          fetchTaskTimeRecordEntries(tid),
+        ])
         if (cancelled) return
         if (tRes.data) setTask(tRes.data as TaskActualVsEstimate)
         setContributors(contribs)
         setEntries(ents)
-      })
-      .catch(() => {})
-      .finally(() => {
+      } catch {
+        // keep previous state on failure (matches the original no-op .catch)
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    }
+    void load()
     return () => {
       cancelled = true
     }

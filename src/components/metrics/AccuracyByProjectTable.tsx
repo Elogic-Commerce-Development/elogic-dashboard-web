@@ -53,17 +53,18 @@ export function AccuracyByProjectTable({ filters }: { filters: Filters }) {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    fetchAccuracyByProject(filters)
-      .then((data) => {
+    async function load() {
+      setLoading(true)
+      try {
+        const data = await fetchAccuracyByProject(filters)
         if (!cancelled) setRows(data)
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setRows([])
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    }
+    void load()
     return () => {
       cancelled = true
     }

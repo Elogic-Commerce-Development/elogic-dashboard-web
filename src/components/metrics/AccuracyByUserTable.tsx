@@ -40,17 +40,18 @@ export function AccuracyByUserTable({ filters }: { filters: Filters }) {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    fetchAccuracyByUser(filters)
-      .then((data) => {
+    async function load() {
+      setLoading(true)
+      try {
+        const data = await fetchAccuracyByUser(filters)
         if (!cancelled) setRows(data)
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setRows([])
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    }
+    void load()
     return () => {
       cancelled = true
     }

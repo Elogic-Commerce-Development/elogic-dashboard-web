@@ -18,6 +18,11 @@ type Props<T> = {
 
 export function DataTable<T>({ data, columns, emptyText = 'No rows.', loading = false, rowClassName }: Props<T>) {
   const [sorting, setSorting] = useState<SortingState>([])
+  // TanStack Table's useReactTable() intentionally returns fresh functions each
+  // render, which the React Compiler can't memoize. There's no code-level fix
+  // short of dropping the library, and the compiler isn't in this build anyway,
+  // so this advisory is non-actionable — scope-disable it on this line only.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
     data,
     columns,

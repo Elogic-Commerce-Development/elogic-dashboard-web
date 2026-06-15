@@ -98,17 +98,18 @@ export function OverrunTable({ filters }: { filters: Filters }) {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    fetchTasksOverrun(filters)
-      .then((data) => {
+    async function load() {
+      setLoading(true)
+      try {
+        const data = await fetchTasksOverrun(filters)
         if (!cancelled) setRows(data)
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setRows([])
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    }
+    void load()
     return () => {
       cancelled = true
     }
