@@ -9,7 +9,8 @@ import {
   type MonthlyTrend,
   type TaskActualVsEstimate,
 } from '@/lib/queries'
-import { formatHours, formatRatio, acTaskUrl } from '@/lib/format'
+import { formatHours, formatRatio, externalTaskLink } from '@/lib/format'
+import { SourceBadge } from '@/components/SourceBadge'
 import { EstimationAdoptionChart } from '@/components/EstimationAdoptionChart'
 import { EstimateAccuracyChart } from '@/components/EstimateAccuracyChart'
 import { QualitySignalsSection } from '@/components/QualitySignalsSection'
@@ -235,12 +236,13 @@ export function DashboardPage() {
                   >
                     {row.task_name}
                   </Link>
+                  <SourceBadge source={row.source} />
                   <a
-                    href={acTaskUrl(row.project_id, row.task_id)}
+                    href={externalTaskLink({ source: row.source, projectId: row.project_id, taskId: row.task_id, taskJiraKey: row.task_jira_key }).url}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="shrink-0 text-neutral-400 hover:text-neutral-600"
-                    title="Open in ActiveCollab"
+                    title={externalTaskLink({ source: row.source, projectId: row.project_id, taskId: row.task_id, taskJiraKey: row.task_jira_key }).label}
                   >
                     <ExternalLinkIcon />
                   </a>
@@ -283,12 +285,13 @@ export function DashboardPage() {
                   >
                     {row.task_name}
                   </Link>
+                  <SourceBadge source={row.source} />
                   <a
-                    href={acTaskUrl(row.project_id, row.task_id)}
+                    href={externalTaskLink({ source: row.source, projectId: row.project_id, taskId: row.task_id, taskJiraKey: row.task_jira_key }).url}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="shrink-0 text-neutral-400 hover:text-neutral-600"
-                    title="Open in ActiveCollab"
+                    title={externalTaskLink({ source: row.source, projectId: row.project_id, taskId: row.task_id, taskJiraKey: row.task_jira_key }).label}
                   >
                     <ExternalLinkIcon />
                   </a>

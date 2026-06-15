@@ -15,7 +15,8 @@ import {
   type EmployeeDay,
   type UserDetail,
 } from '@/lib/queries'
-import { formatHours, formatRatio, acTaskUrl, peopleForceEmployeeUrl } from '@/lib/format'
+import { formatHours, formatRatio, externalTaskLink, peopleForceEmployeeUrl } from '@/lib/format'
+import { SourceBadge } from '@/components/SourceBadge'
 import { periodRange, type PeriodPreset } from '@/lib/period'
 import { summarizeUtilization } from '@/lib/utilization'
 
@@ -23,26 +24,35 @@ const taskColumns: ColumnDef<ContributorTaskSummary>[] = [
   {
     accessorKey: 'task_name',
     header: 'Task',
-    cell: ({ row }) => (
-      <div className="flex items-center gap-1.5">
-        <Link
-          to="/tasks/$taskId"
-          params={{ taskId: String(row.original.task_id) }}
-          className="text-blue-600 hover:text-blue-800 hover:underline"
-        >
-          {row.original.task_name}
-        </Link>
-        <a
-          href={acTaskUrl(row.original.project_id, row.original.task_id)}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="shrink-0 text-neutral-400 hover:text-neutral-600"
-          title="Open in ActiveCollab"
-        >
-          <ExternalLinkIcon />
-        </a>
-      </div>
-    ),
+    cell: ({ row }) => {
+      const ext = externalTaskLink({
+        source: row.original.source,
+        projectId: row.original.project_id,
+        taskId: row.original.task_id,
+        taskJiraKey: row.original.task_jira_key,
+      })
+      return (
+        <div className="flex items-center gap-1.5">
+          <Link
+            to="/tasks/$taskId"
+            params={{ taskId: String(row.original.task_id) }}
+            className="text-blue-600 hover:text-blue-800 hover:underline"
+          >
+            {row.original.task_name}
+          </Link>
+          <SourceBadge source={row.original.source} />
+          <a
+            href={ext.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 text-neutral-400 hover:text-neutral-600"
+            title={ext.label}
+          >
+            <ExternalLinkIcon />
+          </a>
+        </div>
+      )
+    },
   },
   {
     accessorKey: 'project_name',
