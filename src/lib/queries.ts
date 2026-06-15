@@ -943,7 +943,13 @@ export async function fetchDashboardRecentOverruns(limit = 5): Promise<RecentOve
     )
     .gt('ratio', 1)
     .gte('last_record_date', thirtyDaysAgoIso())
+    // actual_hours desc, then created_on/task_id desc as deterministic
+    // tie-breakers — the old client sorted a created_on-desc list with a
+    // stable sort, so ties resolved to the most-recent task. Without these,
+    // PostgREST tie order is arbitrary and the top-5 could differ at a tie.
     .order('actual_hours', { ascending: false })
+    .order('created_on', { ascending: false })
+    .order('task_id', { ascending: false })
     .limit(limit)
   if (error) throw error
   return ((data ?? []) as Array<{
@@ -976,7 +982,10 @@ export async function fetchDashboardRecentUnestimated(limit = 5): Promise<Recent
     .eq('is_completed', false)
     .gt('actual_hours', 0)
     .gte('last_record_date', thirtyDaysAgoIso())
+    // Deterministic tie-breakers — see fetchDashboardRecentOverruns.
     .order('actual_hours', { ascending: false })
+    .order('created_on', { ascending: false })
+    .order('task_id', { ascending: false })
     .limit(limit)
   if (error) throw error
   return ((data ?? []) as Array<{
