@@ -167,6 +167,39 @@ export type MonthlyTrend = {
   estimate_adoption_rate: number | null
 }
 
+export type DashboardKpiMonth = {
+  month: string
+  total_tasks: number
+  estimated_tasks: number
+  total_hours: number
+  unestimated_tasks_with_time: number
+  unestimated_hours: number
+  overrun_tasks: number
+  overrun_hours: number
+}
+
+export type DashboardAccuracyMonth = {
+  month: string
+  mean_usage: number | null
+  min_usage: number | null
+  max_usage: number | null
+  sample_size: number
+}
+
+export type DashboardQualityMonth = {
+  month: string
+  iter_median: number | null
+  iter_p25: number | null
+  iter_p75: number | null
+  iter_sample_size: number
+  iter_any_capped: boolean
+  bug_median: number | null
+  bug_p25: number | null
+  bug_p75: number | null
+  bug_sample_size: number
+  bug_any_capped: boolean
+}
+
 export type RecentUnestimated = {
   task_id: number
   task_name: string
@@ -309,8 +342,7 @@ export async function fetchTasksOverrun(filters: Filters): Promise<TaskActualVsE
 
 export async function fetchAllTasksFiltered(projectIds: number[], userIds: number[]): Promise<TaskActualVsEstimate[]> {
   // PostgREST caps each response at 1000 rows by default. The outsourcing
-  // scope can exceed that, so walk pages until we get a short page. Same
-  // pattern as fetchMonthlyTrendFiltered below.
+  // scope can exceed that, so walk pages until we get a short page.
   const PAGE = 1000
   const all: TaskActualVsEstimate[] = []
   let offset = 0
@@ -857,112 +889,119 @@ export async function fetchMonthlyTrend(): Promise<MonthlyTrend[]> {
   return (data ?? []) as MonthlyTrend[]
 }
 
-type TimeRecordRow = {
-  task_id: number
-  value_hours: number
-  record_date: string
+/* ── Dashboard overview (server-side aggregation; see v_dashboard_* views) ── */
+
+export async function fetchDashboardKpisMonthly(): Promise<DashboardKpiMonth[]> {
+  const { data, error } = await supabase
+    .from('v_dashboard_kpis_monthly')
+    .select('*')
+    .order('month', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as DashboardKpiMonth[]
 }
 
-/**
- * Fetch time records for filtered projects/users, then compute the monthly
- * trend client-side (mirrors the SQL in v_monthly_trend but scoped).
- */
-export async function fetchMonthlyTrendFiltered(
-  projectIds: number[],
-  userIds: number[],
-  tasks: TaskActualVsEstimate[],
-): Promise<MonthlyTrend[]> {
-  // Build a lookup of task-level info we already have
-  const taskMap = new Map<number, TaskActualVsEstimate>()
-  for (const t of tasks) taskMap.set(t.task_id, t)
+export async function fetchDashboardAccuracyMonthly(): Promise<DashboardAccuracyMonth[]> {
+  const { data, error } = await supabase
+    .from('v_dashboard_accuracy_monthly')
+    .select('*')
+    .order('month', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as DashboardAccuracyMonth[]
+}
 
-  // Fetch time records scoped to the same project/user filters
-  let q = supabase
-    .from('time_records')
-    .select('task_id, value_hours, record_date')
-    .eq('is_trashed', false)
-    .not('task_id', 'is', null)
-  if (projectIds.length > 0) q = q.in('project_id', projectIds)
-  if (userIds.length > 0) q = q.in('user_id', userIds)
+export async function fetchDashboardQualityMonthly(): Promise<DashboardQualityMonth[]> {
+  const { data, error } = await supabase
+    .from('v_dashboard_quality_monthly')
+    .select('*')
+    .order('month', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as DashboardQualityMonth[]
+}
 
-  // Paginate – Supabase default limit is 1000
-  const allRecords: TimeRecordRow[] = []
-  const PAGE = 1000
-  let offset = 0
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const { data, error } = await q.range(offset, offset + PAGE - 1)
-    if (error) throw error
-    const rows = (data ?? []) as TimeRecordRow[]
-    allRecords.push(...rows)
-    if (rows.length < PAGE) break
-    offset += PAGE
-  }
+export async function fetchDashboardTrend(): Promise<MonthlyTrend[]> {
+  const { data, error } = await supabase
+    .from('v_dashboard_trend_monthly')
+    .select('*')
+    .order('month', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as MonthlyTrend[]
+}
 
-  // Only keep records whose task is in our filtered set
-  const taskIds = new Set(taskMap.keys())
-  const filtered = allRecords.filter((r) => r.task_id != null && taskIds.has(r.task_id))
+/** Trailing-30-day cutoff (UTC date), matching the old client computeShortlists. */
+function thirtyDaysAgoIso(): string {
+  const cutoff = new Date()
+  cutoff.setDate(cutoff.getDate() - 30)
+  return cutoff.toISOString().split('T')[0]
+}
 
-  // Group by month
-  const months = new Map<string, {
-    hours: number
-    taskHours: Map<number, number>
-  }>()
+export async function fetchDashboardRecentOverruns(limit = 5): Promise<RecentOverrun[]> {
+  // ratio > 1 ⟺ estimate_hours > 0 AND actual_hours > estimate_hours.
+  const { data, error } = await supabase
+    .from('v_dashboard_tasks')
+    .select(
+      'task_id, task_name, project_id, project_name, estimate_hours, actual_hours, ratio, last_record_date, source, task_jira_key, project_jira_key',
+    )
+    .gt('ratio', 1)
+    .gte('last_record_date', thirtyDaysAgoIso())
+    // actual_hours desc, then created_on/task_id desc as deterministic
+    // tie-breakers — the old client sorted a created_on-desc list with a
+    // stable sort, so ties resolved to the most-recent task. Without these,
+    // PostgREST tie order is arbitrary and the top-5 could differ at a tie.
+    .order('actual_hours', { ascending: false })
+    .order('created_on', { ascending: false })
+    .order('task_id', { ascending: false })
+    .limit(limit)
+  if (error) throw error
+  return ((data ?? []) as Array<{
+    task_id: number; task_name: string; project_id: number; project_name: string
+    estimate_hours: number; actual_hours: number; ratio: number; last_record_date: string
+    source: string | null; task_jira_key: string | null; project_jira_key: string | null
+  }>).map((t) => ({
+    task_id: t.task_id,
+    task_name: t.task_name,
+    project_id: t.project_id,
+    project_name: t.project_name,
+    estimate_hours: Number(t.estimate_hours),
+    actual_hours: Number(t.actual_hours),
+    ratio: Number(t.ratio),
+    recent_hours: Number(t.actual_hours),
+    last_record_date: t.last_record_date,
+    source: t.source,
+    task_jira_key: t.task_jira_key,
+    project_jira_key: t.project_jira_key,
+  }))
+}
 
-  for (const r of filtered) {
-    const month = r.record_date.slice(0, 7) + '-01' // "YYYY-MM-01"
-    let bucket = months.get(month)
-    if (!bucket) { bucket = { hours: 0, taskHours: new Map() }; months.set(month, bucket) }
-    bucket.hours += Number(r.value_hours)
-    bucket.taskHours.set(r.task_id, (bucket.taskHours.get(r.task_id) ?? 0) + Number(r.value_hours))
-  }
-
-  // Build per-task total hours for overrun detection (matches v_monthly_trend CTE)
-  const taskTotalHours = new Map<number, number>()
-  for (const r of filtered) {
-    taskTotalHours.set(r.task_id, (taskTotalHours.get(r.task_id) ?? 0) + Number(r.value_hours))
-  }
-
-  // Produce MonthlyTrend rows
-  const result: MonthlyTrend[] = []
-  for (const [month, bucket] of Array.from(months.entries()).sort()) {
-    const activeTaskIds = Array.from(bucket.taskHours.keys())
-    const activeTasks = activeTaskIds.length
-
-    let unestimatedTasks = 0
-    let unestimatedHours = 0
-    let overrunTasks = 0
-    let overrunHours = 0
-    let estimatedCount = 0
-
-    for (const tid of activeTaskIds) {
-      const t = taskMap.get(tid)
-      if (!t) continue
-      const monthHours = bucket.taskHours.get(tid) ?? 0
-      if (t.estimate_hours == null) {
-        unestimatedTasks++
-        unestimatedHours += monthHours
-      } else {
-        estimatedCount++
-        const totalActual = taskTotalHours.get(tid) ?? 0
-        if (Number(t.estimate_hours) > 0 && totalActual > Number(t.estimate_hours)) {
-          overrunTasks++
-          overrunHours += monthHours
-        }
-      }
-    }
-
-    result.push({
-      month,
-      active_tasks: activeTasks,
-      total_hours: Math.round(bucket.hours * 100) / 100,
-      unestimated_tasks: unestimatedTasks,
-      unestimated_hours: Math.round(unestimatedHours * 100) / 100,
-      overrun_tasks: overrunTasks,
-      overrun_hours: Math.round(overrunHours * 100) / 100,
-      estimate_adoption_rate: activeTasks > 0 ? estimatedCount / activeTasks : null,
-    })
-  }
-
-  return result
+export async function fetchDashboardRecentUnestimated(limit = 5): Promise<RecentUnestimated[]> {
+  const { data, error } = await supabase
+    .from('v_dashboard_tasks')
+    .select(
+      'task_id, task_name, project_id, project_name, actual_hours, last_record_date, source, task_jira_key, project_jira_key',
+    )
+    .is('estimate_hours', null)
+    .eq('is_completed', false)
+    .gt('actual_hours', 0)
+    .gte('last_record_date', thirtyDaysAgoIso())
+    // Deterministic tie-breakers — see fetchDashboardRecentOverruns.
+    .order('actual_hours', { ascending: false })
+    .order('created_on', { ascending: false })
+    .order('task_id', { ascending: false })
+    .limit(limit)
+  if (error) throw error
+  return ((data ?? []) as Array<{
+    task_id: number; task_name: string; project_id: number; project_name: string
+    actual_hours: number; last_record_date: string
+    source: string | null; task_jira_key: string | null; project_jira_key: string | null
+  }>).map((t) => ({
+    task_id: t.task_id,
+    task_name: t.task_name,
+    project_id: t.project_id,
+    project_name: t.project_name,
+    recent_hours: Number(t.actual_hours),
+    total_hours: Number(t.actual_hours),
+    last_record_date: t.last_record_date,
+    source: t.source,
+    task_jira_key: t.task_jira_key,
+    project_jira_key: t.project_jira_key,
+  }))
 }

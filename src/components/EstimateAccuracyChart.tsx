@@ -13,8 +13,7 @@ import {
   ReferenceLine,
   type TooltipContentProps,
 } from 'recharts'
-import type { TaskActualVsEstimate } from '@/lib/queries'
-import { mean } from '@/lib/stats'
+import type { DashboardAccuracyMonth } from '@/lib/queries'
 import { enumerateMonths, type DashboardPeriodRange } from '@/lib/dashboardPeriod'
 
 type Bucket = {
@@ -39,35 +38,18 @@ function formatMonthLabel(monthIso: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' })
 }
 
-function buildBuckets(tasks: TaskActualVsEstimate[], range: DashboardPeriodRange): Bucket[] {
-  const months = enumerateMonths(range)
-  const usagesByMonth = new Map<string, number[]>()
-  for (const m of months) usagesByMonth.set(m, [])
+function buildBuckets(data: DashboardAccuracyMonth[], range: DashboardPeriodRange): Bucket[] {
+  const byMonth = new Map(data.map((d) => [d.month, d]))
 
-  for (const t of tasks) {
-    if (!t.is_completed) continue
-    if (t.estimate_hours == null) continue
-    const est = Number(t.estimate_hours)
-    if (!(est > 0)) continue
-    const act = Number(t.actual_hours)
-    if (!(act > 0)) continue
-    if (!t.completed_on) continue
-    const monthKey = t.completed_on.slice(0, 7) + '-01'
-    const bucket = usagesByMonth.get(monthKey)
-    if (!bucket) continue
-    bucket.push(act / est)
-  }
-
-  const withStats = months.map((m) => {
-    const usages = usagesByMonth.get(m) ?? []
-    const meanUsage = mean(usages)
+  const withStats = enumerateMonths(range).map((m) => {
+    const row = byMonth.get(m)
     return {
       month: m,
       label: formatMonthLabel(m),
-      mean_usage: meanUsage,
-      min_usage: usages.length === 0 ? null : Math.min(...usages),
-      max_usage: usages.length === 0 ? null : Math.max(...usages),
-      sample_size: usages.length,
+      mean_usage: row && row.mean_usage != null ? Number(row.mean_usage) : null,
+      min_usage: row && row.min_usage != null ? Number(row.min_usage) : null,
+      max_usage: row && row.max_usage != null ? Number(row.max_usage) : null,
+      sample_size: row ? Number(row.sample_size) : 0,
     }
   })
 
@@ -124,14 +106,14 @@ function formatPct(r: number | null | undefined): string {
 }
 
 export function EstimateAccuracyChart({
-  tasks,
+  data,
   range,
 }: {
-  tasks: TaskActualVsEstimate[]
+  data: DashboardAccuracyMonth[]
   range: DashboardPeriodRange
 }) {
-  const data = useMemo(() => buildBuckets(tasks, range), [tasks, range])
-  const hasAny = data.some((d) => d.sample_size > 0)
+  const chartData = useMemo(() => buildBuckets(data, range), [data, range])
+  const hasAny = chartData.some((d) => d.sample_size > 0)
 
   return (
     <div className="rounded-lg border border-neutral-200 bg-white shadow-sm">
@@ -145,7 +127,7 @@ export function EstimateAccuracyChart({
       <div className="px-2 py-4" style={{ height: 300 }}>
         {hasAny ? (
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={data} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+            <ComposedChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
               <XAxis dataKey="label" tick={{ fontSize: 11 }} />
               <YAxis
@@ -169,7 +151,7 @@ export function EstimateAccuracyChart({
               <Tooltip content={(props) => <AccuracyTooltip {...props} />} cursor={{ fill: '#f5f5f5' }} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Bar yAxisId="left" dataKey="bar_value" name="Avg usage">
-                {data.map((d) => (
+                {chartData.map((d) => (
                   <Cell
                     key={d.month}
                     fill={d.sample_size === 0 ? '#a3a3a3' : barColor(d.mean_usage)}
