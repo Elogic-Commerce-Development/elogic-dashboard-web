@@ -29,6 +29,9 @@ export function SyncStatusBadge() {
   }
 
   const last = status.last_successful_sync
+  // Reading the current time once during render to flag a >24h-stale sync is intentional
+  // and harmless here; no need to lift it into state/an effect for a static badge.
+  // eslint-disable-next-line react-hooks/purity
   const isStale = last !== null && Date.now() - new Date(last).getTime() > 24 * 60 * 60 * 1000
 
   return (

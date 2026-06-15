@@ -7,6 +7,10 @@ import { supabase } from '@/lib/supabase'
 import { LoginForm } from '@/components/LoginForm'
 import { router } from '@/router'
 
+// This is the app entry module: it mounts the tree and defines AuthGate inline.
+// React Fast Refresh of the entry file is meaningless, so the "move component to a
+// separate file" advice doesn't apply here.
+// eslint-disable-next-line react-refresh/only-export-components
 function AuthGate() {
   const [session, setSession] = useState<Session | null>(null)
   const [ready, setReady] = useState(false)
