@@ -81,21 +81,21 @@ export function PeoplePage() {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    const hasPeriod = Boolean(from || to)
-    const load = hasPeriod
-      ? fetchContributorStatsForPeriod({ from, to, userIds })
-      : fetchContributorStats(userIds)
-    load
-      .then((data) => {
+    async function load() {
+      setLoading(true)
+      const hasPeriod = Boolean(from || to)
+      try {
+        const data = await (hasPeriod
+          ? fetchContributorStatsForPeriod({ from, to, userIds })
+          : fetchContributorStats(userIds))
         if (!cancelled) setRows(data)
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setRows([])
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    }
+    void load()
     return () => {
       cancelled = true
     }

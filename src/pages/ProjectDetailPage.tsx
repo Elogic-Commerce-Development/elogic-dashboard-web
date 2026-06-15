@@ -287,11 +287,22 @@ export function ProjectDetailPage() {
   const [tasksOpen, setTasksOpen] = useState(false)
   const [contributorsOpen, setContributorsOpen] = useState(false)
 
+  // Reset the task filter to 'all' when the project or period changes (e.g. a
+  // dangling 'recent-overrun' filter after leaving all-time mode). Done during
+  // render via the previous-key pattern rather than in an effect, so the reset
+  // lands before paint without a cascading effect render.
+  const taskFilterKey = `${pid}|${isAllTime}|${rangeFrom}|${rangeTo}`
+  const [prevTaskFilterKey, setPrevTaskFilterKey] = useState(taskFilterKey)
+  if (taskFilterKey !== prevTaskFilterKey) {
+    setPrevTaskFilterKey(taskFilterKey)
+    setTaskFilter('all')
+  }
+
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
 
     async function load() {
+      setLoading(true)
       const pRes = await supabase
         .from('projects')
         .select('id, name, is_completed, source, jira_key')
@@ -325,10 +336,6 @@ export function ProjectDetailPage() {
       })
     return () => { cancelled = true }
   }, [pid, isAllTime, rangeFrom, rangeTo])
-
-  // Reset the task filter when the project or the period changes (e.g. a
-  // dangling 'recent-overrun' filter after leaving all-time mode).
-  useEffect(() => { setTaskFilter('all') }, [pid, isAllTime, rangeFrom, rangeTo])
 
   function setPeriod(preset: PeriodPreset, customFrom?: string, customTo?: string) {
     navigate({

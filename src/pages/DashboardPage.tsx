@@ -108,7 +108,8 @@ export function DashboardPage() {
   // switcher filters these client-side — no refetch.
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
+    // `loading` initialises to true and this effect runs once on mount (no
+    // deps), so there is no synchronous setState to flip it on here.
     Promise.all([
       fetchDashboardKpisMonthly(),
       fetchDashboardAccuracyMonthly(),

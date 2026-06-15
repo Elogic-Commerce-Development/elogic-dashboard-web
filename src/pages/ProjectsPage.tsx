@@ -95,21 +95,21 @@ export function ProjectsPage() {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    const hasPeriod = Boolean(from || to)
-    const load = hasPeriod
-      ? fetchProjectStatsForPeriod({ from, to, projectIds })
-      : fetchProjectStats(projectIds)
-    load
-      .then((data) => {
+    async function load() {
+      setLoading(true)
+      const hasPeriod = Boolean(from || to)
+      try {
+        const data = await (hasPeriod
+          ? fetchProjectStatsForPeriod({ from, to, projectIds })
+          : fetchProjectStats(projectIds))
         if (!cancelled) setRows(data)
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setRows([])
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    }
+    void load()
     return () => {
       cancelled = true
     }

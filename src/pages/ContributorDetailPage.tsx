@@ -120,33 +120,54 @@ export function ContributorDetailPage() {
   // User detail (independent of period)
   useEffect(() => {
     let cancelled = false
-    setLoadingUser(true)
-    fetchUserDetail(uid)
-      .then((data) => { if (!cancelled) setUser(data) })
-      .catch(() => { if (!cancelled) setUser(null) })
-      .finally(() => { if (!cancelled) setLoadingUser(false) })
+    async function load() {
+      setLoadingUser(true)
+      try {
+        const data = await fetchUserDetail(uid)
+        if (!cancelled) setUser(data)
+      } catch {
+        if (!cancelled) setUser(null)
+      } finally {
+        if (!cancelled) setLoadingUser(false)
+      }
+    }
+    void load()
     return () => { cancelled = true }
   }, [uid])
 
   // v_employee_day rows for the selected period
   useEffect(() => {
     let cancelled = false
-    setLoadingDays(true)
-    fetchEmployeeDays(uid, range.from, range.to)
-      .then((data) => { if (!cancelled) setDays(data) })
-      .catch(() => { if (!cancelled) setDays([]) })
-      .finally(() => { if (!cancelled) setLoadingDays(false) })
+    async function load() {
+      setLoadingDays(true)
+      try {
+        const data = await fetchEmployeeDays(uid, range.from, range.to)
+        if (!cancelled) setDays(data)
+      } catch {
+        if (!cancelled) setDays([])
+      } finally {
+        if (!cancelled) setLoadingDays(false)
+      }
+    }
+    void load()
     return () => { cancelled = true }
   }, [uid, range.from, range.to])
 
   // Task table for the selected period
   useEffect(() => {
     let cancelled = false
-    setLoadingTasks(true)
-    fetchContributorTaskSummary(uid, { from: range.from, to: range.to })
-      .then((data) => { if (!cancelled) setTasks(data) })
-      .catch(() => { if (!cancelled) setTasks([]) })
-      .finally(() => { if (!cancelled) setLoadingTasks(false) })
+    async function load() {
+      setLoadingTasks(true)
+      try {
+        const data = await fetchContributorTaskSummary(uid, { from: range.from, to: range.to })
+        if (!cancelled) setTasks(data)
+      } catch {
+        if (!cancelled) setTasks([])
+      } finally {
+        if (!cancelled) setLoadingTasks(false)
+      }
+    }
+    void load()
     return () => { cancelled = true }
   }, [uid, range.from, range.to])
 

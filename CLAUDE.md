@@ -119,9 +119,9 @@ npm run lint         # eslint
 - **Path alias is in three places** — `tsconfig.app.json` (`baseUrl` +
   `paths`), `vite.config.ts` (`resolve.alias`), and the imports themselves.
   All three must agree.
-- **AuthGate in `main.tsx`**: `supabase.auth.getSession()` is async;
-  `ready` state prevents the login form flashing for already-signed-in
-  users. Don't remove the `ready` gate.
+- **AuthGate in `components/AuthGate.tsx`** (rendered by `main.tsx`):
+  `supabase.auth.getSession()` is async; `ready` state prevents the login
+  form flashing for already-signed-in users. Don't remove the `ready` gate.
 - **`v_task_actual_vs_estimate` filter:** always filter to
   `estimate_hours IS NOT NULL` in the fetcher, otherwise the Estimate vs
   Actual table shows rows with no estimate.

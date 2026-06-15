@@ -5,12 +5,18 @@ import { formatDateTime } from '@/lib/format'
 export function SyncStatusBadge() {
   const [status, setStatus] = useState<SyncStatusRow | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [isStale, setIsStale] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     fetchSyncStatus()
       .then((row) => {
-        if (!cancelled) setStatus(row)
+        if (cancelled) return
+        setStatus(row)
+        // Staleness depends on the wall clock; compute it here in the effect
+        // (off the render path) so render stays pure — no Date.now() in render.
+        const last = row?.last_successful_sync ?? null
+        setIsStale(last !== null && Date.now() - new Date(last).getTime() > 24 * 60 * 60 * 1000)
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e))
@@ -29,7 +35,6 @@ export function SyncStatusBadge() {
   }
 
   const last = status.last_successful_sync
-  const isStale = last !== null && Date.now() - new Date(last).getTime() > 24 * 60 * 60 * 1000
 
   return (
     <div className="flex items-center gap-2 text-xs text-neutral-600">
