@@ -13,6 +13,7 @@ import { useFilters } from '@/lib/FilterContext'
 import { formatHours } from '@/lib/format'
 import {
   PERIOD_GROUPS,
+  parsePeriodSearch,
   periodRange,
   periodSearchParams,
   type PeriodPreset,
@@ -81,7 +82,11 @@ export function PeoplePage() {
   const [rows, setRows] = useState<PersonMetricRow[]>([])
   const [loading, setLoading] = useState(false)
 
-  const preset: PeriodPreset = search.period ?? PERIOD_GROUPS.grid.default
+  // Validated against the group, not read raw: this grid offers three presets,
+  // so a bookmark carrying `?period=custom` (or a pre-F2 `?period=6m`) has to
+  // fall back to the default rather than resolve to a month it never meant.
+  const preset: PeriodPreset =
+    parsePeriodSearch(search, PERIOD_GROUPS.grid) ?? PERIOD_GROUPS.grid.default
   const isAllTime = preset === 'all_time'
   // One calendar month per non-all-time preset, by construction of the group.
   const month = useMemo(
