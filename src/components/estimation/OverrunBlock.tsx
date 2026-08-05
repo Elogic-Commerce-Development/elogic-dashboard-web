@@ -4,8 +4,15 @@ import type { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/components/DataTable'
 import { SourceBadge } from '@/components/SourceBadge'
 import { externalTaskLink, formatDate, formatHours } from '@/lib/format'
-import { concentration, formatPct, formatRatioX, segmentLabel } from '@/lib/estimation'
-import type { BlowoutTask, PersonOverrunRow, ProjectOverrunRow } from '@/lib/queries'
+import {
+  concentration,
+  formatPct,
+  formatRatioX,
+  overrunByProject,
+  segmentLabel,
+  type ProjectOverrun,
+} from '@/lib/estimation'
+import type { BlowoutTask, PersonOverrunRow } from '@/lib/queries'
 import { Block, Chip, LoadFailure, Loading, Panel, StatTile } from './Section'
 
 /**
@@ -16,7 +23,6 @@ import { Block, Chip, LoadFailure, Loading, Panel, StatTile } from './Section'
 const BLOWOUT_TOP_N = 30
 
 export type OverrunData = {
-  projects: ProjectOverrunRow[]
   people: PersonOverrunRow[]
   tasks: BlowoutTask[]
 }
@@ -108,7 +114,7 @@ const TASK_COLUMNS: ColumnDef<BlowoutTask>[] = [
   },
 ]
 
-function projectColumns(total: number): ColumnDef<ProjectOverrunRow>[] {
+function projectColumns(total: number): ColumnDef<ProjectOverrun>[] {
   return [
     {
       accessorKey: 'project_name',
@@ -217,6 +223,7 @@ export function OverrunBlock({
     }
   }, [data.tasks])
 
+  const projects = useMemo(() => overrunByProject(data.tasks), [data.tasks])
   const projectCols = useMemo(() => projectColumns(totals.hours), [totals.hours])
 
   const visible = allTasks ? data.tasks : data.tasks.slice(0, BLOWOUT_TOP_N)
@@ -295,10 +302,10 @@ export function OverrunBlock({
             <Panel
               title="By project"
               blurb="Where the settled overrun accumulated."
-              meta={`${data.projects.length} projects`}
+              meta={`${projects.length} projects`}
             >
               <DataTable
-                data={data.projects}
+                data={projects}
                 columns={projectCols}
                 emptyText="No project carries realized overrun."
               />
