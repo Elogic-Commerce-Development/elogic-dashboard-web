@@ -17,7 +17,7 @@ import {
 } from '@/lib/queries'
 import { formatHours, formatRatio, externalTaskLink, peopleForceEmployeeUrl } from '@/lib/format'
 import { SourceBadge } from '@/components/SourceBadge'
-import { periodRange, type PeriodPreset } from '@/lib/period'
+import { PERIOD_GROUPS, periodRange, periodSearchParams, type PeriodPreset } from '@/lib/period'
 import { summarizeUtilization } from '@/lib/utilization'
 
 const taskColumns: ColumnDef<ContributorTaskSummary>[] = [
@@ -104,7 +104,7 @@ export function ContributorDetailPage() {
   const navigate = useNavigate()
   const uid = Number(userId)
 
-  const activePreset: PeriodPreset = search.preset ?? 'current_month'
+  const activePreset: PeriodPreset = search.period ?? PERIOD_GROUPS.person.default
   const range = useMemo(
     () => periodRange(activePreset, search.from, search.to),
     [activePreset, search.from, search.to],
@@ -179,11 +179,7 @@ export function ContributorDetailPage() {
     navigate({
       to: '/people/$userId',
       params: { userId: String(uid) },
-      search: () => ({
-        preset,
-        from: preset === 'custom' ? customFrom : undefined,
-        to: preset === 'custom' ? customTo : undefined,
-      }),
+      search: () => periodSearchParams(preset, PERIOD_GROUPS.person, customFrom, customTo),
     })
   }
 
@@ -211,6 +207,7 @@ export function ContributorDetailPage() {
 
       <PeriodSwitcher
         preset={activePreset}
+        group={PERIOD_GROUPS.person}
         customFrom={search.from}
         customTo={search.to}
         onChange={setPeriod}

@@ -14,7 +14,7 @@ import {
   type TooltipContentProps,
 } from 'recharts'
 import type { DashboardAccuracyMonth } from '@/lib/queries'
-import { enumerateMonths, type DashboardPeriodRange } from '@/lib/dashboardPeriod'
+import { enumerateMonths, type PeriodRange } from '@/lib/period'
 
 type Bucket = {
   month: string                            // "YYYY-MM-01"
@@ -38,7 +38,7 @@ function formatMonthLabel(monthIso: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' })
 }
 
-function buildBuckets(data: DashboardAccuracyMonth[], range: DashboardPeriodRange): Bucket[] {
+function buildBuckets(data: DashboardAccuracyMonth[], range: PeriodRange): Bucket[] {
   const byMonth = new Map(data.map((d) => [d.month, d]))
 
   const withStats = enumerateMonths(range).map((m) => {
@@ -110,7 +110,7 @@ export function EstimateAccuracyChart({
   range,
 }: {
   data: DashboardAccuracyMonth[]
-  range: DashboardPeriodRange
+  range: PeriodRange
 }) {
   const chartData = useMemo(() => buildBuckets(data, range), [data, range])
   const hasAny = chartData.some((d) => d.sample_size > 0)

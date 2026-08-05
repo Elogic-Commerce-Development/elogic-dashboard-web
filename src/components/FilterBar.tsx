@@ -2,16 +2,18 @@ import { useEffect, useMemo, useState } from 'react'
 import { fetchProjects, fetchUsers, type ProjectListItem, type UserListItem } from '@/lib/queries'
 import type { Filters } from '@/lib/filters'
 
+/**
+ * Entity filters only. The date range moved out to <PeriodSwitcher> + the URL
+ * when the three period systems were unified; `Filters.from` / `Filters.to`
+ * are now written by `useListFilters`, not here.
+ */
 type Props = {
   value: Filters
   onChange: (next: Filters) => void
-  hideDateRange?: boolean
   /** Hide the Projects multi-select (People grid: people + period only) */
   hideProjects?: boolean
   /** Hide the Users multi-select (Projects grid: projects + period only) */
   hideUsers?: boolean
-  /** When set, only these project IDs appear in the Projects dropdown */
-  scopedProjectIds?: number[]
 }
 
 function SearchableMultiSelect<T extends { id: number }>({
@@ -90,48 +92,22 @@ function SearchableMultiSelect<T extends { id: number }>({
   )
 }
 
-export function FilterBar({ value, onChange, hideDateRange, hideProjects, hideUsers, scopedProjectIds }: Props) {
-  const [allProjects, setAllProjects] = useState<ProjectListItem[]>([])
+export function FilterBar({ value, onChange, hideProjects, hideUsers }: Props) {
+  const [projects, setProjects] = useState<ProjectListItem[]>([])
   const [users, setUsers] = useState<UserListItem[]>([])
   const [projectSearch, setProjectSearch] = useState('')
   const [userSearch, setUserSearch] = useState('')
-  // Raw date-input text, kept local so typing a year isn't fought by the
-  // controlled value; only complete, plausible dates are pushed to filters.
-  const [fromInput, setFromInput] = useState(value.from ?? '')
-  const [toInput, setToInput] = useState(value.to ?? '')
 
   useEffect(() => {
-    if (!hideProjects) fetchProjects().then(setAllProjects).catch(() => setAllProjects([]))
+    if (!hideProjects) fetchProjects().then(setProjects).catch(() => setProjects([]))
     if (!hideUsers) fetchUsers().then(setUsers).catch(() => setUsers([]))
   }, [hideProjects, hideUsers])
-
-  // <input type="date"> fires onChange on every keystroke, so typing the year
-  // "2026" passes through complete-but-implausible dates (0002, 0020, 0202)
-  // that would filter out every task. Only commit a cleared field or a full
-  // date with a sane year so those intermediate states never hit a query.
-  function commitDate(field: 'from' | 'to', raw: string) {
-    if (raw === '') {
-      onChange({ ...value, [field]: undefined })
-      return
-    }
-    const year = Number(raw.slice(0, 4))
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || year < 2000 || year > 2100) return
-    onChange({ ...value, [field]: raw })
-  }
 
   function clearAll() {
     setProjectSearch('')
     setUserSearch('')
-    setFromInput('')
-    setToInput('')
-    onChange({ from: undefined, to: undefined, projectIds: [], userIds: [] })
+    onChange({ ...value, projectIds: [], userIds: [] })
   }
-
-  const projects = useMemo(() => {
-    if (!scopedProjectIds) return allProjects
-    const scopeSet = new Set(scopedProjectIds)
-    return allProjects.filter((p) => scopeSet.has(p.id))
-  }, [allProjects, scopedProjectIds])
 
   const projectLabel = useMemo(() => {
     if (value.projectIds.length === 0) return 'All projects'
@@ -163,39 +139,7 @@ export function FilterBar({ value, onChange, hideDateRange, hideProjects, hideUs
 
   return (
     <div className="space-y-3 rounded-lg border border-neutral-200 bg-white px-4 py-3 shadow-sm">
-      <div className="flex items-end gap-3">
-        {!hideDateRange && (
-          <>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-neutral-600">From</label>
-              <input
-                type="date"
-                value={fromInput}
-                onChange={(e) => {
-                  setFromInput(e.target.value)
-                  commitDate('from', e.target.value)
-                }}
-                className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs font-medium text-neutral-600">To</label>
-              <input
-                type="date"
-                value={toInput}
-                onChange={(e) => {
-                  setToInput(e.target.value)
-                  commitDate('to', e.target.value)
-                }}
-                className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
-              />
-            </div>
-          </>
-        )}
-
-        <div className="ml-auto">{clearButton}</div>
-      </div>
+      <div className="flex justify-end">{clearButton}</div>
 
       <div className="flex gap-3">
         {!hideProjects && (

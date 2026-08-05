@@ -1,12 +1,31 @@
-import { useFilters } from '@/lib/FilterContext'
+import { useNavigate, useSearch } from '@tanstack/react-router'
 import { EstimateVsActualTable } from '@/components/metrics/EstimateVsActualTable'
 import { AccuracyByProjectTable } from '@/components/metrics/AccuracyByProjectTable'
+import { PeriodSwitcher } from '@/components/PeriodSwitcher'
+import { PERIOD_GROUPS, periodSearchParams, type PeriodPreset } from '@/lib/period'
+import { useListFilters } from '@/lib/useListFilters'
 
 export function EstimatesPage() {
-  const { filters } = useFilters()
+  const search = useSearch({ from: '/estimates' })
+  const navigate = useNavigate()
+  const { preset, filters } = useListFilters(search)
+
+  function setPeriod(next: PeriodPreset, customFrom?: string, customTo?: string) {
+    navigate({
+      to: '/estimates',
+      search: () => periodSearchParams(next, PERIOD_GROUPS.list, customFrom, customTo),
+    })
+  }
 
   return (
     <div className="space-y-6">
+      <PeriodSwitcher
+        preset={preset}
+        group={PERIOD_GROUPS.list}
+        customFrom={search.from}
+        customTo={search.to}
+        onChange={setPeriod}
+      />
       <Section title="Estimate vs actual" description="Every task with an estimate, sorted by creation date.">
         <EstimateVsActualTable filters={filters} />
       </Section>
