@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from '@tanstack/react-router'
-import { supabase } from '@/lib/supabase'
 import {
   fetchTaskContributors,
+  fetchTaskDetail,
   fetchTaskTimeRecordEntries,
   type TaskActualVsEstimate,
   type TaskContributor,
@@ -18,6 +18,7 @@ export function TaskDetailPage() {
   const { taskId } = useParams({ from: '/tasks/$taskId' })
   const tid = Number(taskId)
   const [task, setTask] = useState<TaskActualVsEstimate | null>(null)
+  const [inScope, setInScope] = useState(true)
   const [contributors, setContributors] = useState<TaskContributor[]>([])
   const [entries, setEntries] = useState<TaskTimeEntry[]>([])
   const [loading, setLoading] = useState(true)
@@ -27,21 +28,20 @@ export function TaskDetailPage() {
 
     async function load() {
       setLoading(true)
-      const loadTask = supabase
-        .from('v_task_actual_vs_estimate')
-        .select('*')
-        .eq('task_id', tid)
-        .maybeSingle()
       try {
-        const [tRes, contribs, ents] = await Promise.all([
-          loadTask,
-          fetchTaskContributors(tid),
+        // The task lookup resolves scope, and scope decides which contributor
+        // grain is correct — so it has to land before that fetch, not beside
+        // it. The time-entry list is raw records and is scope-independent.
+        const [detail, ents] = await Promise.all([
+          fetchTaskDetail(tid),
           fetchTaskTimeRecordEntries(tid),
         ])
         if (cancelled) return
-        if (tRes.data) setTask(tRes.data as TaskActualVsEstimate)
-        setContributors(contribs)
+        setTask(detail?.task ?? null)
+        setInScope(detail?.inScope ?? true)
         setEntries(ents)
+        const contribs = detail ? await fetchTaskContributors(tid, detail.inScope) : []
+        if (!cancelled) setContributors(contribs)
       } catch {
         // keep previous state on failure (matches the original no-op .catch)
       } finally {
@@ -83,6 +83,15 @@ export function TaskDetailPage() {
 
   return (
     <div className="space-y-6">
+      {!inScope && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <span className="font-medium">Outside the dashboard's metric scope.</span> This task is
+          either on a project outside the 65 client-delivery projects or was created before
+          2025-01-01, so it carries no canonical metrics. The figures below come from the legacy
+          all-time view and are not comparable with the rest of the dashboard — duplicate accounts
+          are not merged here either.
+        </div>
+      )}
       <div>
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-semibold text-neutral-900">{task.task_name}</h2>
