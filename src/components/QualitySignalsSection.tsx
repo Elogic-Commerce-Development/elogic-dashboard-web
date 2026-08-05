@@ -13,7 +13,7 @@ import {
   type TooltipContentProps,
 } from 'recharts'
 import type { DashboardQualityMonth } from '@/lib/queries'
-import { enumerateMonths, type DashboardPeriodRange } from '@/lib/dashboardPeriod'
+import { enumerateMonths, type PeriodRange } from '@/lib/period'
 
 const CAP_NOTE =
   'Values above the cap (5+ for iterations, 10+ for bugs) are stored as the cap. A median shown with a "≥" prefix is a lower bound — at least one task in that month hit the cap, so the true median may be higher.'
@@ -36,7 +36,7 @@ function formatMonthLabel(monthIso: string): string {
 
 function buildBuckets(
   data: DashboardQualityMonth[],
-  range: DashboardPeriodRange,
+  range: PeriodRange,
   pick: (d: DashboardQualityMonth) => {
     median: number | null
     p25: number | null
@@ -221,7 +221,7 @@ export function QualitySignalsSection({
   range,
 }: {
   data: DashboardQualityMonth[]
-  range: DashboardPeriodRange
+  range: PeriodRange
 }) {
   const [expanded, setExpanded] = useState(false)
 

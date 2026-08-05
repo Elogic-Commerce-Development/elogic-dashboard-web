@@ -1,18 +1,39 @@
 /**
- * Period presets for the employee utilization page. Each preset resolves to
- * an ISO `from`/`to` date range. "Current week" and "Current month" end at
- * today (running totals); the other historical presets cover the full span.
+ * The period model — one preset vocabulary for the whole app.
  *
- * ISO weeks: Monday is the first day of the week.
+ * This module replaces the three period systems the dashboard grew
+ * independently (redesign plan §3 "Three period systems → one"):
+ *
+ *   1. `lib/period.ts` point-in-time presets  → person / project detail pages
+ *   2. `lib/dashboardPeriod.ts` rolling presets → Dashboard home
+ *   3. the FilterBar's raw From/To date inputs → Overview / Estimates / People / Projects
+ *
+ * All three now speak the `PeriodPreset` vocabulary below, are selected through
+ * the single `<PeriodSwitcher>` component, and live in the URL as `?period=`.
+ *
+ * **Selection layer only.** F1 deliberately did not touch how data for a period
+ * is *fetched*: `periodRange()` / `periodFilterRange()` hand the same
+ * `{from,to}` ISO strings to the same fetchers as before, and custom ranges
+ * still ride the old client-side pipeline. Swapping the fetchers onto the
+ * canonical `v_metric_*` views is F2.
+ *
+ * ISO weeks: Monday is the first day of the week. All date math is UTC to
+ * avoid client-timezone drift on the day boundary.
  */
 
 export type PeriodPreset =
+  // point-in-time
   | 'current_week'
   | 'last_week'
   | 'current_month'
   | 'previous_month'
   | 'current_year'
   | 'previous_year'
+  // rolling calendar-month windows (ex-`3m`/`6m`/`12m`)
+  | 'last_3_months'
+  | 'last_6_months'
+  | 'last_12_months'
+  // open-ended
   | 'all_time'
   | 'custom'
 
@@ -20,8 +41,7 @@ export type PeriodRange = { from: string; to: string }
 
 /**
  * Data floor — tasks are synced from this date on (AC_SYNC_FROM_DATE in the
- * backend). Duplicated as a private const in dashboardPeriod.ts; the two
- * period modules are deliberately independent.
+ * backend).
  */
 export const TRACKING_FLOOR = '2025-01-01'
 
@@ -30,10 +50,71 @@ export const PERIOD_LABELS: Record<PeriodPreset, string> = {
   last_week: 'Last week',
   current_month: 'Current month',
   previous_month: 'Previous month',
-  current_year: 'Current year',
+  last_3_months: 'Last 3 months',
+  last_6_months: 'Last 6 months',
+  last_12_months: 'Last 12 months',
+  current_year: 'Year to date',
   previous_year: 'Previous year',
   all_time: 'All time',
   custom: 'Custom',
+}
+
+/**
+ * Which presets each surface offers, and which of them render as pills rather
+ * than sitting in the "More periods" dropdown.
+ *
+ * Each group reproduces exactly the option set that surface shipped before the
+ * unification, so no page's default — and therefore no page's numbers — moves:
+ * Dashboard kept its five rolling windows, the person page still has no
+ * "All time", the project page still does. `list` is the new one: its default
+ * is `all_time`, which resolves to *no* date filter, i.e. what those pages
+ * queried when the FilterBar's From/To were left empty.
+ */
+export type PeriodGroup = {
+  readonly primary: readonly PeriodPreset[]
+  readonly secondary: readonly PeriodPreset[]
+  readonly default: PeriodPreset
+}
+
+export const PERIOD_GROUPS = {
+  /** Dashboard home — rolling windows only, no custom range (see F2). */
+  dashboard: {
+    primary: ['last_3_months', 'last_6_months', 'last_12_months', 'current_year', 'all_time'],
+    secondary: [],
+    default: 'last_6_months',
+  },
+  /** Person detail — deliberately excludes `all_time`. */
+  person: {
+    primary: ['current_week', 'last_week', 'current_month'],
+    secondary: ['previous_month', 'current_year', 'previous_year', 'custom'],
+    default: 'current_month',
+  },
+  /** Project detail — the person set plus `all_time`. */
+  project: {
+    primary: ['current_week', 'last_week', 'current_month'],
+    secondary: ['previous_month', 'current_year', 'previous_year', 'all_time', 'custom'],
+    default: 'current_month',
+  },
+  /** Overview / Estimates / People / Projects list grids. */
+  list: {
+    primary: ['all_time', 'current_month', 'previous_month'],
+    secondary: [
+      'current_week',
+      'last_week',
+      'last_3_months',
+      'last_6_months',
+      'last_12_months',
+      'current_year',
+      'previous_year',
+      'custom',
+    ],
+    default: 'all_time',
+  },
+} as const satisfies Record<string, PeriodGroup>
+
+/** Every preset a group accepts, in display order. */
+export function groupPresets(group: PeriodGroup): PeriodPreset[] {
+  return [...group.primary, ...group.secondary]
 }
 
 export function periodRange(
@@ -60,6 +141,14 @@ export function periodRange(
       const end = endOfMonth(start)
       return { from: toIso(start), to: toIso(end) }
     }
+    // Rolling windows snap to the first of the month N-1 months back, so a
+    // "last 6 months" window is six whole calendar months including this one.
+    case 'last_3_months':
+      return { from: toIso(startOfMonth(addMonths(today, -2))), to: toIso(today) }
+    case 'last_6_months':
+      return { from: toIso(startOfMonth(addMonths(today, -5))), to: toIso(today) }
+    case 'last_12_months':
+      return { from: toIso(startOfMonth(addMonths(today, -11))), to: toIso(today) }
     case 'current_year':
       return { from: toIso(startOfYear(today)), to: toIso(today) }
     case 'previous_year': {
@@ -70,8 +159,9 @@ export function periodRange(
       }
     }
     case 'all_time':
-      // Range is informational (PeriodSwitcher label); pages treat the
-      // preset itself as "no period filter" rather than querying this span.
+      // Informational range (the switcher caption, and the Dashboard's month
+      // enumeration). Pages that filter a query treat the preset itself as
+      // "no period filter" — see periodFilterRange.
       return { from: TRACKING_FLOOR, to: toIso(today) }
     case 'custom':
       return {
@@ -81,15 +171,106 @@ export function periodRange(
   }
 }
 
-export function isValidPreset(value: string | undefined): value is PeriodPreset {
-  if (value === undefined) return false
-  // Deliberately excludes 'all_time' — the person page keeps its original
-  // preset set; only the project page opts in via isValidProjectPreset.
-  return ['current_week', 'last_week', 'current_month', 'previous_month', 'current_year', 'previous_year', 'custom'].includes(value)
+/**
+ * The period expressed as the `Filters` date bounds the list-page fetchers
+ * already consume.
+ *
+ * `all_time` deliberately resolves to **no bounds**. Every list fetcher treats
+ * "no from/to" as its all-time path — `PeoplePage` / `ProjectsPage` switch
+ * between the server view and the client period pipeline on
+ * `Boolean(from || to)`, and `fetchAccuracyByProject` switches between the
+ * pre-aggregated view and a client-side recompute the same way. Resolving
+ * `all_time` to the tracking floor instead would silently re-route those pages
+ * onto the period pipeline and move their numbers. Don't "fix" it.
+ */
+export function periodFilterRange(
+  preset: PeriodPreset,
+  customFrom?: string,
+  customTo?: string,
+): { from: string | undefined; to: string | undefined } {
+  if (preset === 'all_time') return { from: undefined, to: undefined }
+  const range = periodRange(preset, customFrom, customTo)
+  return { from: range.from, to: range.to }
 }
 
-export function isValidProjectPreset(value: string | undefined): value is PeriodPreset {
-  return isValidPreset(value) || value === 'all_time'
+/**
+ * URL search → preset, accepting only what this surface offers.
+ *
+ * Returns `undefined` for anything the group doesn't offer — the page then
+ * falls back to the group default, which is why every search field stays
+ * optional and existing `<Link>` call sites without search params still
+ * type-check.
+ *
+ * Back-compat, so no pre-unification bookmark changes meaning:
+ *   - `period` is the canonical key. It was also the Dashboard's key, so a
+ *     value read from it may still be one of the old rolling ids
+ *     (`3m`/`6m`/`12m`/`ytd`/`all`) and is mapped through the alias table.
+ *   - `preset` was the detail pages' key and only ever carried canonical
+ *     names, so it is read **without** the aliases. That matters: `?preset=ytd`
+ *     was meaningless on the person page before (it fell back to the default),
+ *     and aliasing it here would newly resolve it to "Year to date" — a URL
+ *     quietly changing meaning is exactly what this shim exists to prevent.
+ */
+export function parsePeriodSearch(
+  search: Record<string, unknown>,
+  group: PeriodGroup,
+): PeriodPreset | undefined {
+  const offered = groupPresets(group)
+
+  if (typeof search.period === 'string') {
+    const canonical = LEGACY_PRESET_ALIASES[search.period] ?? search.period
+    return offered.includes(canonical as PeriodPreset) ? (canonical as PeriodPreset) : undefined
+  }
+  if (typeof search.preset === 'string') {
+    return offered.includes(search.preset as PeriodPreset) ? (search.preset as PeriodPreset) : undefined
+  }
+  return undefined
+}
+
+/** The Dashboard's pre-unification preset ids. */
+const LEGACY_PRESET_ALIASES: Record<string, PeriodPreset> = {
+  '3m': 'last_3_months',
+  '6m': 'last_6_months',
+  '12m': 'last_12_months',
+  ytd: 'current_year',
+  all: 'all_time',
+}
+
+/**
+ * The `?period=…&from=…&to=…` triplet for a navigation. The preset is omitted
+ * when it equals the surface's default, so the canonical URL of a page at its
+ * default period carries no search params at all (as `/` and `/people/$id`
+ * always have).
+ */
+export function periodSearchParams(
+  preset: PeriodPreset,
+  group: PeriodGroup,
+  customFrom?: string,
+  customTo?: string,
+): { period?: PeriodPreset; from?: string; to?: string } {
+  return {
+    period: preset === group.default ? undefined : preset,
+    from: preset === 'custom' ? customFrom : undefined,
+    to: preset === 'custom' ? customTo : undefined,
+  }
+}
+
+/**
+ * Emit a list of first-of-month ISO strings covering every month in the
+ * range, inclusive. Used by the Dashboard charts to render empty buckets for
+ * months with no qualifying tasks. Always at least one entry.
+ */
+export function enumerateMonths(range: PeriodRange): string[] {
+  const fromDate = new Date(range.from + 'T00:00:00Z')
+  const toDate = new Date(range.to + 'T00:00:00Z')
+  const cursor = startOfMonth(fromDate)
+  const end = startOfMonth(toDate)
+  const months: string[] = []
+  while (cursor <= end) {
+    months.push(toIso(cursor))
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1)
+  }
+  return months
 }
 
 // All date math is in UTC to avoid client-timezone drift on the date boundary.

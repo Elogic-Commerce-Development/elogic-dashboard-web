@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/components/DataTable'
+import { PeriodSwitcher } from '@/components/PeriodSwitcher'
 import { QaRate } from '@/components/QaRate'
-import { useFilters } from '@/lib/FilterContext'
 import { fetchContributorStats, type ContributorStats } from '@/lib/queries'
 import { fetchContributorStatsForPeriod } from '@/lib/periodStats'
 import { formatHours } from '@/lib/format'
+import { PERIOD_GROUPS, periodSearchParams, type PeriodPreset } from '@/lib/period'
+import { useListFilters } from '@/lib/useListFilters'
 
 const columns: ColumnDef<ContributorStats>[] = [
   {
@@ -71,9 +73,18 @@ const columns: ColumnDef<ContributorStats>[] = [
 ]
 
 export function PeoplePage() {
-  const { filters } = useFilters()
+  const search = useSearch({ from: '/people' })
+  const navigate = useNavigate()
+  const { preset, filters } = useListFilters(search)
   const [rows, setRows] = useState<ContributorStats[]>([])
   const [loading, setLoading] = useState(false)
+
+  function setPeriod(next: PeriodPreset, customFrom?: string, customTo?: string) {
+    navigate({
+      to: '/people',
+      search: () => periodSearchParams(next, PERIOD_GROUPS.list, customFrom, customTo),
+    })
+  }
 
   // This page filters by people + date range only; filters.projectIds is
   // deliberately ignored (the Projects select is hidden here).
@@ -103,6 +114,13 @@ export function PeoplePage() {
 
   return (
     <div className="space-y-3">
+      <PeriodSwitcher
+        preset={preset}
+        group={PERIOD_GROUPS.list}
+        customFrom={search.from}
+        customTo={search.to}
+        onChange={setPeriod}
+      />
       <div>
         <h2 className="text-sm font-semibold text-neutral-900">Contributors (by time tracking)</h2>
         <p className="text-xs text-neutral-500">

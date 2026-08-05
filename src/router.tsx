@@ -8,29 +8,36 @@ import { ProjectsPage } from '@/pages/ProjectsPage'
 import { ProjectDetailPage } from '@/pages/ProjectDetailPage'
 import { ContributorDetailPage } from '@/pages/ContributorDetailPage'
 import { TaskDetailPage } from '@/pages/TaskDetailPage'
-import { isValidPreset, isValidProjectPreset, type PeriodPreset } from '@/lib/period'
-import { isValidDashboardPeriodPreset, type DashboardPeriodPreset } from '@/lib/dashboardPeriod'
+import { PERIOD_GROUPS, parsePeriodSearch, type PeriodGroup, type PeriodPreset } from '@/lib/period'
 
-export type ContributorDetailSearch = {
-  // All optional so existing <Link to="/people/$userId"> call sites without
-  // search params remain valid. Component defaults to 'current_month' when
-  // preset is missing.
-  preset?: PeriodPreset
+/**
+ * Every period-aware route carries the same search contract: a `period`
+ * preset plus the `from`/`to` bounds a custom range needs.
+ *
+ * All three fields are optional, so existing `<Link to="/people/$userId">`
+ * call sites without `search` still type-check and a page at its default
+ * period has a clean URL. Defaults are resolved in the page component, not
+ * here — `parsePeriodSearch` only rejects presets the surface doesn't offer
+ * (and rewrites legacy `?preset=` / `?period=6m` URLs onto the unified
+ * vocabulary).
+ */
+export type PeriodSearch = {
+  period?: PeriodPreset
   from?: string
   to?: string
 }
 
-export type ProjectDetailSearch = {
-  // Mirrors ContributorDetailSearch (same optionality contract for existing
-  // <Link to="/projects/$projectId"> call sites). Additionally accepts the
-  // 'all_time' preset, which the person page does not.
-  preset?: PeriodPreset
-  from?: string
-  to?: string
-}
+/** Back-compat alias — the detail routes' search shape has not changed. */
+export type ContributorDetailSearch = PeriodSearch
+export type ProjectDetailSearch = PeriodSearch
+export type DashboardSearch = PeriodSearch
 
-export type DashboardSearch = {
-  period?: DashboardPeriodPreset
+function periodSearchValidator(group: PeriodGroup) {
+  return (search: Record<string, unknown>): PeriodSearch => ({
+    period: parsePeriodSearch(search, group),
+    from: typeof search.from === 'string' ? search.from : undefined,
+    to: typeof search.to === 'string' ? search.to : undefined,
+  })
 }
 
 const rootRoute = createRootRoute({
@@ -41,64 +48,49 @@ const dashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   component: DashboardPage,
-  validateSearch: (search: Record<string, unknown>): DashboardSearch => {
-    const raw = typeof search.period === 'string' ? search.period : undefined
-    return {
-      period: isValidDashboardPeriodPreset(raw) ? raw : undefined,
-    }
-  },
+  validateSearch: periodSearchValidator(PERIOD_GROUPS.dashboard),
 })
 
 const overviewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/overview',
   component: OverviewPage,
+  validateSearch: periodSearchValidator(PERIOD_GROUPS.list),
 })
 
 const estimatesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/estimates',
   component: EstimatesPage,
+  validateSearch: periodSearchValidator(PERIOD_GROUPS.list),
 })
 
 const peopleRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/people',
   component: PeoplePage,
+  validateSearch: periodSearchValidator(PERIOD_GROUPS.list),
 })
 
 const projectsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/projects',
   component: ProjectsPage,
+  validateSearch: periodSearchValidator(PERIOD_GROUPS.list),
 })
 
 const projectDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/projects/$projectId',
   component: ProjectDetailPage,
-  validateSearch: (search: Record<string, unknown>): ProjectDetailSearch => {
-    const rawPreset = typeof search.preset === 'string' ? search.preset : undefined
-    return {
-      preset: isValidProjectPreset(rawPreset) ? rawPreset : undefined,
-      from: typeof search.from === 'string' ? search.from : undefined,
-      to: typeof search.to === 'string' ? search.to : undefined,
-    }
-  },
+  validateSearch: periodSearchValidator(PERIOD_GROUPS.project),
 })
 
 const contributorDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/people/$userId',
   component: ContributorDetailPage,
-  validateSearch: (search: Record<string, unknown>): ContributorDetailSearch => {
-    const rawPreset = typeof search.preset === 'string' ? search.preset : undefined
-    return {
-      preset: isValidPreset(rawPreset) ? rawPreset : undefined,
-      from: typeof search.from === 'string' ? search.from : undefined,
-      to: typeof search.to === 'string' ? search.to : undefined,
-    }
-  },
+  validateSearch: periodSearchValidator(PERIOD_GROUPS.person),
 })
 
 const taskDetailRoute = createRoute({

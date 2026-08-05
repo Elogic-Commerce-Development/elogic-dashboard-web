@@ -1,12 +1,25 @@
 import { useEffect, useState } from 'react'
-import { useFilters } from '@/lib/FilterContext'
+import { useNavigate, useSearch } from '@tanstack/react-router'
 import { Accordion } from '@/components/Accordion'
+import { PeriodSwitcher } from '@/components/PeriodSwitcher'
 import { TasksWithoutEstimatesTable } from '@/components/metrics/TasksWithoutEstimatesTable'
 import { OverrunTable } from '@/components/metrics/OverrunTable'
 import { fetchOverviewCounts } from '@/lib/queries'
+import { PERIOD_GROUPS, periodSearchParams, type PeriodPreset } from '@/lib/period'
+import { useListFilters } from '@/lib/useListFilters'
 
 export function OverviewPage() {
-  const { filters } = useFilters()
+  const search = useSearch({ from: '/overview' })
+  const navigate = useNavigate()
+  const { preset, filters } = useListFilters(search)
+
+  function setPeriod(next: PeriodPreset, customFrom?: string, customTo?: string) {
+    navigate({
+      to: '/overview',
+      search: () => periodSearchParams(next, PERIOD_GROUPS.list, customFrom, customTo),
+    })
+  }
+
   // Both sections start collapsed so it's clear there's more than one.
   const [openWithout, setOpenWithout] = useState(false)
   const [openOverrun, setOpenOverrun] = useState(false)
@@ -34,6 +47,14 @@ export function OverviewPage() {
 
   return (
     <div className="space-y-4">
+      <PeriodSwitcher
+        preset={preset}
+        group={PERIOD_GROUPS.list}
+        customFrom={search.from}
+        customTo={search.to}
+        onChange={setPeriod}
+      />
+
       <Accordion
         title="Tasks without estimates"
         meta={meta(counts?.withoutEstimates)}

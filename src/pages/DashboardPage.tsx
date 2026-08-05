@@ -20,14 +20,15 @@ import { SourceBadge } from '@/components/SourceBadge'
 import { EstimationAdoptionChart } from '@/components/EstimationAdoptionChart'
 import { EstimateAccuracyChart } from '@/components/EstimateAccuracyChart'
 import { QualitySignalsSection } from '@/components/QualitySignalsSection'
-import { DashboardPeriodSwitcher } from '@/components/DashboardPeriodSwitcher'
+import { PeriodSwitcher } from '@/components/PeriodSwitcher'
 import {
-  DEFAULT_DASHBOARD_PERIOD,
-  dashboardPeriodRange,
+  PERIOD_GROUPS,
   enumerateMonths,
-  type DashboardPeriodPreset,
-  type DashboardPeriodRange,
-} from '@/lib/dashboardPeriod'
+  periodRange,
+  periodSearchParams,
+  type PeriodPreset,
+  type PeriodRange,
+} from '@/lib/period'
 
 function KpiCard({
   label,
@@ -52,7 +53,7 @@ function KpiCard({
   )
 }
 
-function sumKpiMonths(months: DashboardKpiMonth[], range: DashboardPeriodRange): GlobalKpis {
+function sumKpiMonths(months: DashboardKpiMonth[], range: PeriodRange): GlobalKpis {
   const inRange = new Set(enumerateMonths(range))
   let total_tasks = 0
   let estimated = 0
@@ -85,13 +86,13 @@ function sumKpiMonths(months: DashboardKpiMonth[], range: DashboardPeriodRange):
 export function DashboardPage() {
   const search = useSearch({ from: '/' })
   const navigate = useNavigate()
-  const preset: DashboardPeriodPreset = search.period ?? DEFAULT_DASHBOARD_PERIOD
-  const range = useMemo(() => dashboardPeriodRange(preset), [preset])
+  const preset: PeriodPreset = search.period ?? PERIOD_GROUPS.dashboard.default
+  const range = useMemo(() => periodRange(preset), [preset])
 
-  function setPreset(next: DashboardPeriodPreset) {
+  function setPreset(next: PeriodPreset) {
     navigate({
       to: '/',
-      search: () => ({ period: next === DEFAULT_DASHBOARD_PERIOD ? undefined : next }),
+      search: () => periodSearchParams(next, PERIOD_GROUPS.dashboard),
     })
   }
 
@@ -146,9 +147,7 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-end">
-        <DashboardPeriodSwitcher preset={preset} onChange={setPreset} />
-      </div>
+      <PeriodSwitcher preset={preset} group={PERIOD_GROUPS.dashboard} onChange={setPreset} />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <KpiCard

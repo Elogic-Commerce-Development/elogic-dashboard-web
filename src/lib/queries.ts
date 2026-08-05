@@ -44,15 +44,6 @@ export type TaskActualVsEstimate = {
   project_jira_key: string | null
 }
 
-export type EstimateAccuracyByUser = {
-  assignee_id: number | null
-  assignee_name: string | null
-  estimated_tasks: number
-  total_tasks: number
-  mean_ratio: number | null
-  median_ratio: number | null
-}
-
 export type EstimateAccuracyByProject = {
   project_id: number
   project_name: string
@@ -382,19 +373,6 @@ export async function fetchActualVsEstimate(filters: Filters): Promise<TaskActua
   return (data ?? []) as TaskActualVsEstimate[]
 }
 
-export async function fetchAccuracyByUser(filters: Filters): Promise<EstimateAccuracyByUser[]> {
-  let q = supabase
-    .from('v_estimate_accuracy_by_user')
-    .select('*')
-    .order('estimated_tasks', { ascending: false })
-
-  if (filters.userIds.length > 0) q = q.in('assignee_id', filters.userIds)
-
-  const { data, error } = await q
-  if (error) throw error
-  return (data ?? []) as EstimateAccuracyByUser[]
-}
-
 export async function fetchAccuracyByProject(filters: Filters): Promise<EstimateAccuracyByProject[]> {
   // No date range → the all-time view.
   if (!filters.from && !filters.to) {
@@ -505,47 +483,6 @@ export async function fetchUserClassMap(): Promise<Map<number, string | null>> {
   return map
 }
 
-/**
- * Returns the IDs of projects labeled "OUTSOURCING PROJECT".
- * The dashboard is scoped to these projects only.
- */
-export async function fetchOutsourcingProjectIds(): Promise<number[]> {
-  // First find the label ID (name has a leading space in AC data, so use ilike)
-  const { data: labels, error: labelsErr } = await supabase
-    .from('labels')
-    .select('id')
-    .ilike('name', '%OUTSOURCING PROJECT%')
-    .eq('scope', 'project')
-    .limit(1)
-  if (labelsErr) throw labelsErr
-  if (!labels || labels.length === 0) return []
-
-  const labelId = labels[0].id
-
-  // Then find all projects with that label
-  const { data: projects, error: projErr } = await supabase
-    .from('projects')
-    .select('id')
-    .eq('label_id', labelId)
-    .eq('is_trashed', false)
-  if (projErr) throw projErr
-  return (projects ?? []).map((p) => p.id)
-}
-
-/**
- * IDs of the Jira-sourced projects (PSP). Unioned with the outsourcing scope so
- * PSP appears on the dashboard the same way AC outsourcing projects do.
- */
-export async function fetchJiraProjectIds(): Promise<number[]> {
-  const { data, error } = await supabase
-    .from('projects')
-    .select('id')
-    .eq('source', 'jira')
-    .eq('is_trashed', false)
-  if (error) throw error
-  return (data ?? []).map((p) => p.id)
-}
-
 export async function fetchUsers(): Promise<UserListItem[]> {
   const { data, error } = await supabase
     .from('users')
@@ -555,12 +492,6 @@ export async function fetchUsers(): Promise<UserListItem[]> {
     .order('display_name', { ascending: true })
   if (error) throw error
   return (data ?? []) as UserListItem[]
-}
-
-export async function fetchGlobalKpis(): Promise<GlobalKpis | null> {
-  const { data, error } = await supabase.from('v_global_kpis').select('*').maybeSingle()
-  if (error) throw error
-  return (data as GlobalKpis | null) ?? null
 }
 
 export async function fetchContributorStats(userIds: number[] = []): Promise<ContributorStats[]> {
@@ -838,55 +769,6 @@ export async function fetchTaskContributors(taskId: number): Promise<TaskContrib
     .order('hours', { ascending: false })
   if (error) throw error
   return (data ?? []) as TaskContributor[]
-}
-
-export async function fetchTopUnestimatedWithTime(limit = 5): Promise<TaskActualVsEstimate[]> {
-  const { data, error } = await supabase
-    .from('v_task_actual_vs_estimate')
-    .select('*')
-    .is('estimate_hours', null)
-    .gt('actual_hours', 0)
-    .order('actual_hours', { ascending: false })
-    .limit(limit)
-  if (error) throw error
-  return (data ?? []) as TaskActualVsEstimate[]
-}
-
-export async function fetchTopOverruns(limit = 5): Promise<TaskActualVsEstimate[]> {
-  const { data, error } = await supabase
-    .from('v_tasks_overrun')
-    .select('*')
-    .order('ratio', { ascending: false })
-    .limit(limit)
-  if (error) throw error
-  return (data ?? []) as TaskActualVsEstimate[]
-}
-
-export async function fetchRecentUnestimated(limit = 5): Promise<RecentUnestimated[]> {
-  const { data, error } = await supabase
-    .from('v_recent_unestimated_activity')
-    .select('*')
-    .limit(limit)
-  if (error) throw error
-  return (data ?? []) as RecentUnestimated[]
-}
-
-export async function fetchRecentOverruns(limit = 5): Promise<RecentOverrun[]> {
-  const { data, error } = await supabase
-    .from('v_recent_overrun_activity')
-    .select('*')
-    .limit(limit)
-  if (error) throw error
-  return (data ?? []) as RecentOverrun[]
-}
-
-export async function fetchMonthlyTrend(): Promise<MonthlyTrend[]> {
-  const { data, error } = await supabase
-    .from('v_monthly_trend')
-    .select('*')
-    .order('month', { ascending: true })
-  if (error) throw error
-  return (data ?? []) as MonthlyTrend[]
 }
 
 /* ── Dashboard overview (server-side aggregation; see v_dashboard_* views) ── */

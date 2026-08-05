@@ -1,9 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Outlet, Link, useRouterState } from '@tanstack/react-router'
 import { supabase } from '@/lib/supabase'
 import { defaultFilters, type Filters } from '@/lib/filters'
 import { FilterContext } from '@/lib/FilterContext'
-import { fetchJiraProjectIds, fetchOutsourcingProjectIds } from '@/lib/queries'
 import { FilterBar } from './FilterBar'
 import { SyncStatusBadge } from './SyncStatusBadge'
 import { TrackingSinceBanner } from './TrackingSinceBanner'
@@ -17,32 +16,26 @@ const navItems = [
 ]
 
 export function AppLayout() {
+  // Entity filters only. The period lives in each page's URL and is selected
+  // through <PeriodSwitcher> — see lib/period + lib/useListFilters.
   const [filters, setFilters] = useState<Filters>(defaultFilters)
-  // Dashboard scope = AC "OUTSOURCING PROJECT" ids ∪ Jira (PSP) project ids.
-  const [outsourcingProjectIds, setOutsourcingProjectIds] = useState<number[]>([])
   const routerState = useRouterState()
   const pathname = routerState.location.pathname
   const isDashboard = pathname === '/'
   // /people, /projects, and the deep /tasks/<id> page are all scoped to a
-  // single entity, so the global From/To + project + user multi-select adds
-  // no value there. The list pages keep the FilterBar.
+  // single entity, so the global project + user multi-select adds no value
+  // there. The list pages keep the FilterBar.
   const isContributorDetail = /^\/people\/[^/]+/.test(pathname)
   const isProjectDetail = /^\/projects\/[^/]+/.test(pathname)
   const isTaskDetail = /^\/tasks\/[^/]+/.test(pathname)
   const hideFilterBar = isDashboard || isContributorDetail || isProjectDetail || isTaskDetail
-  // The list grids each get only their own entity filter + the date range:
+  // The list grids each get only their own entity filter:
   // /people filters by people, /projects by projects.
   const isPeopleList = pathname === '/people'
   const isProjectsList = pathname === '/projects'
 
-  useEffect(() => {
-    Promise.all([fetchOutsourcingProjectIds(), fetchJiraProjectIds()])
-      .then(([ac, jira]) => setOutsourcingProjectIds([...new Set([...ac, ...jira])]))
-      .catch(() => setOutsourcingProjectIds([]))
-  }, [])
-
   return (
-    <FilterContext value={{ filters, setFilters, outsourcingProjectIds }}>
+    <FilterContext value={{ filters, setFilters }}>
       <div className="min-h-screen bg-neutral-50">
         <header className="border-b border-neutral-200 bg-white">
           <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
@@ -91,10 +84,8 @@ export function AppLayout() {
             <FilterBar
               value={filters}
               onChange={setFilters}
-              hideDateRange={isDashboard}
               hideProjects={isPeopleList}
               hideUsers={isProjectsList}
-              scopedProjectIds={isDashboard ? outsourcingProjectIds : undefined}
             />
           )}
           <Outlet />

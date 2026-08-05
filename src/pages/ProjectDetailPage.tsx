@@ -9,7 +9,7 @@ import { supabase } from '@/lib/supabase'
 import { fetchAllTasksFiltered, type TaskActualVsEstimate, type RecentOverrun } from '@/lib/queries'
 import { fetchProjectPeriodDetail, type ProjectContributorRow } from '@/lib/periodStats'
 import { formatHours, externalProjectLink, externalTaskLink } from '@/lib/format'
-import { periodRange, type PeriodPreset } from '@/lib/period'
+import { PERIOD_GROUPS, periodRange, periodSearchParams, type PeriodPreset } from '@/lib/period'
 import { SourceBadge } from '@/components/SourceBadge'
 
 type ProjectInfo = {
@@ -269,7 +269,7 @@ export function ProjectDetailPage() {
   const navigate = useNavigate()
   const pid = Number(projectId)
 
-  const activePreset: PeriodPreset = search.preset ?? 'current_month'
+  const activePreset: PeriodPreset = search.period ?? PERIOD_GROUPS.project.default
   const isAllTime = activePreset === 'all_time'
   const range = useMemo(
     () => periodRange(activePreset, search.from, search.to),
@@ -341,11 +341,7 @@ export function ProjectDetailPage() {
     navigate({
       to: '/projects/$projectId',
       params: { projectId: String(pid) },
-      search: () => ({
-        preset,
-        from: preset === 'custom' ? customFrom : undefined,
-        to: preset === 'custom' ? customTo : undefined,
-      }),
+      search: () => periodSearchParams(preset, PERIOD_GROUPS.project, customFrom, customTo),
     })
   }
 
@@ -440,10 +436,10 @@ export function ProjectDetailPage() {
 
       <PeriodSwitcher
         preset={activePreset}
+        group={PERIOD_GROUPS.project}
         customFrom={search.from}
         customTo={search.to}
         onChange={setPeriod}
-        includeAllTime
       />
 
       {/* KPI cards */}

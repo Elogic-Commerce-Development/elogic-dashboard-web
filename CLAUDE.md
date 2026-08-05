@@ -16,25 +16,33 @@ Deployed to Vercel (free tier).
 - Zod for the filter schema
 - `@/` path alias via tsconfig `baseUrl` + `paths` + matching Vite `resolve.alias`
 
-**No router library in MVP** — AppShell holds a `tab` state and switches
-between overview / estimates / people. If deeplinks are needed, add
-`@tanstack/react-router` (already in `package.json`).
+Routing is `@tanstack/react-router` — `src/router.tsx` holds the route tree,
+`components/AppLayout.tsx` is the root-route shell (header, nav, FilterBar,
+`<Outlet/>`). The old tab-state `AppShell.tsx` was deleted in F1.
 
 ## Directory map
 
 ```
 src/
 ├── main.tsx                     ← entrypoint + <AuthGate>
+├── router.tsx                   ← route tree + the shared period search contract
 ├── index.css                    ← @import 'tailwindcss' + base body styles
 ├── lib/
 │   ├── supabase.ts              ← singleton supabase client
 │   ├── queries.ts               ← typed fetchers for every view
+│   ├── period.ts                ← THE period model: presets, ranges, groups, URL parsing
+│   ├── periodStats.ts           ← client-side period re-aggregation (F2 deletes this)
+│   ├── useListFilters.ts        ← list grids: FilterBar entities + URL period → Filters
 │   ├── filters.ts               ← Zod schema + defaultFilters + Filters type
-│   └── format.ts                ← formatHours, formatRatio, formatDate, formatDateTime
+│   ├── FilterContext.ts         ← entity-filter context (projects/users)
+│   ├── utilization.ts           ← v_employee_day → utilization buckets
+│   └── format.ts                ← formatHours, formatRatio, formatDate, externalTaskLink…
+├── pages/                       ← one component per route
 └── components/
-    ├── AppShell.tsx             ← top-level layout (header, tabs, FilterBar, tab content)
+    ├── AppLayout.tsx            ← root-route shell (header, nav, FilterBar, Outlet)
     ├── LoginForm.tsx            ← email/password via supabase.auth.signInWithPassword
-    ├── FilterBar.tsx            ← date range + multi-select projects/users + Clear
+    ├── PeriodSwitcher.tsx       ← THE period switcher, used by every surface
+    ├── FilterBar.tsx            ← multi-select projects/users + Clear (no dates)
     ├── TrackingSinceBanner.tsx  ← amber banner noting 2025-01-01 cutoff
     ├── SyncStatusBadge.tsx      ← reads v_sync_status, colored dot
     ├── DataTable.tsx            ← generic TanStack Table wrapper
@@ -42,18 +50,19 @@ src/
         ├── TasksWithoutEstimatesTable.tsx
         ├── OverrunTable.tsx
         ├── EstimateVsActualTable.tsx
-        ├── AccuracyByUserTable.tsx
         └── AccuracyByProjectTable.tsx
 ```
 
 ## Data flow
 
 ```
-AppShell
-  ├── holds Filters state
-  ├── passes to <FilterBar> (which updates filters)
-  └── passes to each metrics/*Table component
-       └── Table calls src/lib/queries.ts → Supabase view → renders via DataTable
+AppLayout
+  ├── holds the entity Filters (projectIds / userIds) and renders <FilterBar>
+  └── <Outlet/> → page
+       ├── reads its period from the URL (?period=…&from=…&to=…)
+       ├── list pages: useListFilters() merges period + entities into Filters
+       └── passes Filters down to each metrics/*Table
+            └── Table calls src/lib/queries.ts → Supabase view → DataTable
 ```
 
 All data fetching is **inside each table component** — no global
@@ -109,7 +118,8 @@ npm run lint         # eslint
 3. Create `src/components/metrics/<Name>Table.tsx` — copy the closest
    existing table as a starting point, define TanStack column defs, wire
    the fetcher in a `useEffect` keyed on filters.
-4. Slot the new table into the appropriate tab in `AppShell.tsx`.
+4. Render the new table from the relevant page in `src/pages/` (and add the
+   route in `src/router.tsx` if it needs one).
 
 ## Gotchas
 
@@ -132,10 +142,27 @@ npm run lint         # eslint
   angles from the cells (rendering as a tiny ~28° wedge) instead of from
   the data values. Also set `startAngle={90} endAngle={-270}` explicitly
   for a top-starting clockwise donut. See [UtilizationDonut.tsx](src/components/UtilizationDonut.tsx).
-- **Period state on `/people/$userId`:** lives in URL search params via
-  TanStack Router's `validateSearch`. All search fields are optional so
-  existing `<Link to="/people/$userId">` call sites without `search` still
-  type-check. Defaults are resolved in the page component, not the router.
+- **One period model, one switcher.** `src/lib/period.ts` owns the whole
+  vocabulary; `PERIOD_GROUPS` says which presets each surface offers and what
+  its default is; `<PeriodSwitcher group={…}>` is the only control. Adding a
+  preset means adding it to `PeriodPreset` + `PERIOD_LABELS` + `periodRange()`
+  and to whichever group should show it — never a second module.
+- **Period state lives in URL search params** via TanStack Router's
+  `validateSearch` (`periodSearchValidator` in `router.tsx`). All search fields
+  are optional so existing `<Link to="/people/$userId">` call sites without
+  `search` still type-check. Defaults are resolved in the page component, not
+  the router, and `periodSearchParams()` omits the preset when it equals the
+  page default so a page at its default has a clean URL.
+- **`all_time` means "no date filter", not "since the tracking floor".**
+  `periodFilterRange()` returns `{from: undefined, to: undefined}` for it,
+  because `PeoplePage`/`ProjectsPage` switch between the server view and the
+  client period pipeline on `Boolean(from || to)`, and `fetchAccuracyByProject`
+  switches branches the same way. Resolving it to `2025-01-01` would silently
+  re-route those pages onto the period pipeline and move their numbers.
+- **`?period=` supersedes `?preset=`, and `3m/6m/12m/ytd/all` are legacy
+  aliases.** `parsePeriodSearch()` still accepts both so pre-F1 bookmarks
+  resolve to the period they always meant. Safe to drop once nobody's
+  bookmarks matter.
 
 ## Browser verification via Chrome MCP
 
@@ -156,11 +183,20 @@ change end-to-end against real data is:
 
 1. `git switch main && git pull` so the feature branch comes off clean main.
 2. Create the feature branch, make changes, run `npm run lint && npm run build`.
-3. Push the branch and open a PR with `gh pr create`. Reply with the PR URL.
+3. Push the branch and reply with a **pre-filled compare URL** —
+   `https://github.com/Elogic-Commerce-Development/elogic-dashboard-web/compare/main...<branch>?quick_pull=1&title=…&body=…`.
+   There is **no `gh` CLI and no GitHub token on this machine**, so
+   `gh pr create` exits 127; don't use it.
 4. Operator merges the PR (or asks for a Vercel preview deployment).
 5. Operator types something like "deployed" in chat once Vercel is done.
-6. Claude uses the **Chrome MCP** (tools named `mcp__Claude_in_Chrome__*`)
+6. Claude uses the **Chrome MCP** (tools named `mcp__claude-in-chrome__*`)
    against the production URL `https://elogic-dashboard-web.vercel.app`.
+
+**Vercel deploys from `main` only** — Claude cannot trigger a deploy, and there
+is no preview URL unless the operator asks Vercel for one. So a change can only
+be verified against real data *after* the operator merges. When a change must be
+proven not to move any number, **capture the baseline from the deployed page
+before writing any code** — that is the only pre-change snapshot available.
 
 This works because the operator's existing Chrome session is already
 authenticated against Supabase — the MCP tab shares cookies with the

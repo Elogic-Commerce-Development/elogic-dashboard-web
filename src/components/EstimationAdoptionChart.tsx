@@ -11,7 +11,7 @@ import {
   Legend,
 } from 'recharts'
 import type { MonthlyTrend } from '@/lib/queries'
-import { enumerateMonths, type DashboardPeriodRange } from '@/lib/dashboardPeriod'
+import { enumerateMonths, type PeriodRange } from '@/lib/period'
 
 function formatMonth(dateStr: string): string {
   const d = new Date(dateStr + 'T00:00:00Z')
@@ -25,7 +25,7 @@ type ChartRow = {
   adoptionPct: number | null
 }
 
-function prepareData(data: MonthlyTrend[], range: DashboardPeriodRange): ChartRow[] {
+function prepareData(data: MonthlyTrend[], range: PeriodRange): ChartRow[] {
   const byMonth = new Map(data.map((d) => [d.month, d]))
   return enumerateMonths(range).map((m) => {
     const d = byMonth.get(m)
@@ -47,7 +47,7 @@ export function EstimationAdoptionChart({
   range,
 }: {
   data: MonthlyTrend[]
-  range: DashboardPeriodRange
+  range: PeriodRange
 }) {
   const chartData = useMemo(() => prepareData(data, range), [data, range])
   const hasAny = chartData.some((d) => d.estimatedTasks > 0 || d.unestimatedTasks > 0)

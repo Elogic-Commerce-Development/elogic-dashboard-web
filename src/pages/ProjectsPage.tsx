@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/components/DataTable'
+import { PeriodSwitcher } from '@/components/PeriodSwitcher'
 import { QaRate } from '@/components/QaRate'
-import { useFilters } from '@/lib/FilterContext'
 import { fetchProjectStats, type ProjectStats } from '@/lib/queries'
 import { fetchProjectStatsForPeriod } from '@/lib/periodStats'
 import { formatHours } from '@/lib/format'
+import { PERIOD_GROUPS, periodSearchParams, type PeriodPreset } from '@/lib/period'
+import { useListFilters } from '@/lib/useListFilters'
 import { SourceBadge } from '@/components/SourceBadge'
 
 const columns: ColumnDef<ProjectStats>[] = [
@@ -75,10 +77,19 @@ const columns: ColumnDef<ProjectStats>[] = [
 ]
 
 export function ProjectsPage() {
-  const { filters } = useFilters()
+  const search = useSearch({ from: '/projects' })
+  const navigate = useNavigate()
+  const { preset, filters } = useListFilters(search)
   const [rows, setRows] = useState<ProjectStats[]>([])
   const [loading, setLoading] = useState(false)
   const [showCompleted, setShowCompleted] = useState(false)
+
+  function setPeriod(next: PeriodPreset, customFrom?: string, customTo?: string) {
+    navigate({
+      to: '/projects',
+      search: () => periodSearchParams(next, PERIOD_GROUPS.list, customFrom, customTo),
+    })
+  }
 
   // Default to active projects only; the toggle reveals completed ones. Works
   // in both all-time (is_completed from v_project_stats) and period mode
@@ -117,6 +128,13 @@ export function ProjectsPage() {
 
   return (
     <div className="space-y-3">
+      <PeriodSwitcher
+        preset={preset}
+        group={PERIOD_GROUPS.list}
+        customFrom={search.from}
+        customTo={search.to}
+        onChange={setPeriod}
+      />
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-sm font-semibold text-neutral-900">Projects (by time tracking)</h2>

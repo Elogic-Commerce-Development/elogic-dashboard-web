@@ -1,94 +1,112 @@
 import { useState } from 'react'
-import { PERIOD_LABELS, periodRange, type PeriodPreset } from '@/lib/period'
+import {
+  PERIOD_LABELS,
+  periodRange,
+  type PeriodGroup,
+  type PeriodPreset,
+} from '@/lib/period'
 
 type Props = {
   preset: PeriodPreset
+  /** Which presets this surface offers — see PERIOD_GROUPS in lib/period. */
+  group: PeriodGroup
   customFrom?: string
   customTo?: string
   onChange: (preset: PeriodPreset, customFrom?: string, customTo?: string) => void
-  /** Adds "All time" to the More-periods dropdown (project page only). */
-  includeAllTime?: boolean
 }
 
-export function PeriodSwitcher({ preset, customFrom, customTo, onChange, includeAllTime }: Props) {
+/**
+ * The period switcher. One component for every surface: the Dashboard, both
+ * detail pages, and the four list grids. What differs between them is the
+ * `group` — the preset list — not the control.
+ *
+ * `group.primary` presets render as pills; anything in `group.secondary` sits
+ * behind "More periods", which collapses to the active preset's label when one
+ * of them is selected. The dropdown and the custom-range row only render when
+ * the group actually offers them, so a group with no secondary presets (the
+ * Dashboard) is just a row of pills plus the resolved-range caption.
+ */
+export function PeriodSwitcher({ preset, group, customFrom, customTo, onChange }: Props) {
   const [showMore, setShowMore] = useState(false)
   const [editingFrom, setEditingFrom] = useState(customFrom ?? '')
   const [editingTo, setEditingTo] = useState(customTo ?? '')
 
-  const secondaryPresets: PeriodPreset[] = includeAllTime
-    ? ['previous_month', 'current_year', 'previous_year', 'all_time', 'custom']
-    : ['previous_month', 'current_year', 'previous_year', 'custom']
-
+  const secondaryActive = group.secondary.includes(preset)
   const range = periodRange(preset, customFrom, customTo)
+  // "as of today" — presets whose upper bound is today rather than a closed
+  // historical boundary, so the caption says the number is still moving.
+  const endsToday =
+    preset === 'current_week' ||
+    preset === 'current_month' ||
+    preset === 'current_year' ||
+    preset === 'all_time' ||
+    preset === 'last_3_months' ||
+    preset === 'last_6_months' ||
+    preset === 'last_12_months'
 
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <PrimaryPill
-          active={preset === 'current_week'}
-          onClick={() => onChange('current_week')}
-          label="Current week"
-        />
-        <PrimaryPill
-          active={preset === 'last_week'}
-          onClick={() => onChange('last_week')}
-          label="Last week"
-        />
-        <PrimaryPill
-          active={preset === 'current_month'}
-          onClick={() => onChange('current_month')}
-          label="Current month"
-        />
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Period">
+        {group.primary.map((p) => (
+          <PrimaryPill
+            key={p}
+            active={preset === p}
+            onClick={() => onChange(p)}
+            label={PERIOD_LABELS[p]}
+          />
+        ))}
 
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setShowMore((v) => !v)}
-            className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
-              secondaryPresets.includes(preset)
-                ? 'border-blue-600 bg-blue-50 text-blue-700'
-                : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50'
-            }`}
-          >
-            {secondaryPresets.includes(preset) ? PERIOD_LABELS[preset] : 'More periods'} ▾
-          </button>
-          {showMore && (
-            <div
-              className="absolute right-0 z-10 mt-1 w-44 rounded-md border border-neutral-200 bg-white py-1 shadow-lg"
-              onMouseLeave={() => setShowMore(false)}
+        {group.secondary.length > 0 && (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowMore((v) => !v)}
+              aria-expanded={showMore}
+              className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                secondaryActive
+                  ? 'border-blue-600 bg-blue-50 text-blue-700'
+                  : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50'
+              }`}
             >
-              {secondaryPresets.map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => {
-                    setShowMore(false)
-                    if (p === 'custom') {
-                      // Default custom range to current_month so the date inputs show something.
-                      const r = periodRange('current_month')
-                      setEditingFrom(customFrom ?? r.from)
-                      setEditingTo(customTo ?? r.to)
-                      onChange('custom', customFrom ?? r.from, customTo ?? r.to)
-                    } else {
-                      onChange(p)
-                    }
-                  }}
-                  className={`block w-full px-3 py-1.5 text-left text-xs hover:bg-neutral-50 ${
-                    preset === p ? 'font-medium text-blue-700' : 'text-neutral-700'
-                  }`}
-                >
-                  {PERIOD_LABELS[p]}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+              {secondaryActive ? PERIOD_LABELS[preset] : 'More periods'} ▾
+            </button>
+            {showMore && (
+              <div
+                className="absolute right-0 z-10 mt-1 w-44 rounded-md border border-neutral-200 bg-white py-1 shadow-lg"
+                onMouseLeave={() => setShowMore(false)}
+              >
+                {group.secondary.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => {
+                      setShowMore(false)
+                      if (p === 'custom') {
+                        // Default the custom range to current_month so the date
+                        // inputs show something rather than opening empty.
+                        const r = periodRange('current_month')
+                        setEditingFrom(customFrom ?? r.from)
+                        setEditingTo(customTo ?? r.to)
+                        onChange('custom', customFrom ?? r.from, customTo ?? r.to)
+                      } else {
+                        onChange(p)
+                      }
+                    }}
+                    className={`block w-full px-3 py-1.5 text-left text-xs hover:bg-neutral-50 ${
+                      preset === p ? 'font-medium text-blue-700' : 'text-neutral-700'
+                    }`}
+                  >
+                    {PERIOD_LABELS[p]}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <span className="ml-auto text-xs text-neutral-500">
           {range.from} → {range.to}
-          {(preset === 'current_week' || preset === 'current_month' || preset === 'current_year' || preset === 'all_time') && (
-            <span className="ml-1 text-neutral-400">(as of today)</span>
-          )}
+          {endsToday && <span className="ml-1 text-neutral-400">(as of today)</span>}
         </span>
       </div>
 
@@ -131,6 +149,7 @@ function PrimaryPill({ active, onClick, label }: { active: boolean; onClick: () 
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
       className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
         active
           ? 'bg-blue-600 text-white shadow-sm'

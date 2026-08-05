@@ -58,17 +58,22 @@ After deploy, every `git push` to `main` ships a new production build.
 
 ```
 src/
-├── main.tsx                       # AuthGate: LoginForm vs AppShell
+├── main.tsx                       # AuthGate: LoginForm vs the router
+├── router.tsx                     # Route tree + shared ?period= search contract
 ├── index.css                      # Tailwind v4 entry
 ├── lib/
 │   ├── supabase.ts                # Supabase client singleton
-│   ├── filters.ts                 # Zod schema for global filters
+│   ├── period.ts                  # The period model (presets, ranges, groups)
+│   ├── useListFilters.ts          # List grids: URL period + entity filters
+│   ├── filters.ts                 # Zod schema for the entity filters
 │   ├── format.ts                  # Hours / ratios / dates
 │   └── queries.ts                 # Typed fetchers per metric view
+├── pages/                         # One component per route
 └── components/
     ├── LoginForm.tsx
-    ├── AppShell.tsx               # Header, tabs, layout
-    ├── FilterBar.tsx              # Date range + project + user filters
+    ├── AppLayout.tsx              # Header, nav, FilterBar, <Outlet/>
+    ├── PeriodSwitcher.tsx         # The period switcher (every surface)
+    ├── FilterBar.tsx              # Project + user multi-selects
     ├── DataTable.tsx              # TanStack Table wrapper
     ├── SyncStatusBadge.tsx        # Reads v_sync_status
     ├── TrackingSinceBanner.tsx    # "Tracking from 2025-01-01" honesty banner
@@ -76,20 +81,23 @@ src/
         ├── TasksWithoutEstimatesTable.tsx
         ├── OverrunTable.tsx
         ├── EstimateVsActualTable.tsx
-        ├── AccuracyByUserTable.tsx
         └── AccuracyByProjectTable.tsx
 ```
 
-The dashboard has three tabs:
+Routes:
 
-| Tab | Tables |
+| Route | Contents |
 |---|---|
-| **Overview** | Tasks without estimates, Tasks overrun |
-| **Estimates** | Estimate vs actual (the flagship view) |
-| **People** | Accuracy by user, Accuracy by project |
+| `/` **Dashboard** | KPI tiles, adoption + accuracy charts, quality signals, 30-day shortlists |
+| `/overview` | Tasks without estimates, Tasks overrun |
+| `/estimates` | Estimate vs actual, Accuracy by project |
+| `/people` · `/people/$userId` | Contributor grid · person detail (utilization, tasks) |
+| `/projects` · `/projects/$projectId` | Project grid · project detail |
+| `/tasks/$taskId` | One task's economics |
 
-All tables consume the same global `Filters` (date range + project +
-assignee multi-select) wired through `FilterBar`.
+Every route selects its period through the same `<PeriodSwitcher>`, stored in
+the URL as `?period=…` (plus `from`/`to` for a custom range). The list grids
+additionally consume the project/assignee multi-selects from `FilterBar`.
 
 ## Adding a new metric
 
@@ -98,7 +106,7 @@ assignee multi-select) wired through `FilterBar`.
 3. **This repo**: add a typed fetcher in `src/lib/queries.ts`
 4. **This repo**: build a `<NewMetricTable>` component in
    `src/components/metrics/`
-5. **This repo**: render it inside the relevant tab in `AppShell.tsx`
+5. **This repo**: render it from the relevant page in `src/pages/`
 6. Commit, push — Vercel auto-deploys
 
 No infrastructure changes, no schema regeneration, no API endpoint. The
