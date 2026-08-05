@@ -15,16 +15,30 @@ function monthLabel(iso: string): string {
  */
 type Direction = 'up_good' | 'up_bad' | 'neutral'
 
-function Delta({ from, to, direction, suffix }: { from: number | null; to: number | null; direction: Direction; suffix: string }) {
+function Delta({
+  from,
+  to,
+  direction,
+  suffix,
+  integer = false,
+}: {
+  from: number | null
+  to: number | null
+  direction: Direction
+  suffix: string
+  /** Counts read as "+1 person", never "+1.0". */
+  integer?: boolean
+}) {
   if (from == null || to == null) return null
   const diff = to - from
   if (Math.abs(diff) < 0.05) return <span className="text-[11px] text-neutral-400">flat vs prior month</span>
   const good = direction === 'neutral' ? null : direction === 'up_good' ? diff > 0 : diff < 0
   const cls = good === null ? 'text-neutral-500' : good ? 'text-emerald-600' : 'text-red-600'
+  const shown = integer || Math.abs(diff) >= 10 ? diff.toFixed(0) : diff.toFixed(1)
   return (
     <span className={`text-[11px] tabular-nums ${cls}`}>
       {diff > 0 ? '+' : ''}
-      {Math.abs(diff) >= 10 ? diff.toFixed(0) : diff.toFixed(1)}
+      {shown}
       {suffix} vs prior month
     </span>
   )
@@ -128,7 +142,15 @@ export function VitalsTiles({ vitals, loading }: { vitals: CompanyVitals | null;
         caption={monthCaption}
         series={loggerSeries}
         lastIsPartial={partial !== null}
-        delta={<Delta from={prior?.active_loggers ?? null} to={last?.active_loggers ?? null} direction="up_good" suffix="" />}
+        delta={
+          <Delta
+            from={prior?.active_loggers ?? null}
+            to={last?.active_loggers ?? null}
+            direction="up_good"
+            suffix=" people"
+            integer
+          />
+        }
         to="/people"
         footnote="People logging any in-scope hours that month — participation, not headcount."
       />

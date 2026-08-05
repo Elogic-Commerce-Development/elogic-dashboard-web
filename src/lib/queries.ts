@@ -1220,6 +1220,68 @@ const SIGNAL_COLUMNS = [
 ].join(', ')
 
 /**
+ * Coerce every numeric column exactly once, at the edge.
+ *
+ * The queue's copy renders some of these through `.toFixed()`, and a value
+ * arriving as a string instead of a number would throw inside render and take
+ * the whole landing page down rather than degrading one row. Cheap insurance
+ * on the one page that has to be up every morning.
+ */
+function normalizeSignals(s: Record<string, unknown>): ProjectSignals {
+  const num = (v: unknown): number => Number(v ?? 0)
+  const numOrNull = (v: unknown): number | null => (v == null ? null : Number(v))
+  const boolOrNull = (v: unknown): boolean | null => (v == null ? null : Boolean(v))
+  return {
+    project_id: num(s.project_id),
+    project_name: String(s.project_name ?? ''),
+    source: (s.source as string | null) ?? null,
+    work_model: String(s.work_model ?? 'unclassified'),
+    rate_band: (s.rate_band as string | null) ?? null,
+    rate_band_weight: num(s.rate_band_weight),
+
+    sig_live_overrun: Boolean(s.sig_live_overrun),
+    live_overrun_tasks: num(s.live_overrun_tasks),
+    live_overrun_hours: num(s.live_overrun_hours),
+    live_overrun_recent_tasks: num(s.live_overrun_recent_tasks),
+
+    sig_approaching: Boolean(s.sig_approaching),
+    approaching_tasks: num(s.approaching_tasks),
+    approaching_hours: num(s.approaching_hours),
+
+    sig_second_qa_round: Boolean(s.sig_second_qa_round),
+    second_qa_tasks: num(s.second_qa_tasks),
+    second_qa_hours: num(s.second_qa_hours),
+
+    sig_stuck: Boolean(s.sig_stuck),
+    stuck_tasks: num(s.stuck_tasks),
+    stuck_hours: num(s.stuck_hours),
+    stuck_estimate_hours: num(s.stuck_estimate_hours),
+
+    sig_spinning: Boolean(s.sig_spinning),
+    hours_recent_4wk: num(s.hours_recent_4wk),
+    completions_recent_30d: num(s.completions_recent_30d),
+    last_completion_on: (s.last_completion_on as string | null) ?? null,
+
+    sig_backlog_estimation_debt: Boolean(s.sig_backlog_estimation_debt),
+    backlog_net_growth_6wk: num(s.backlog_net_growth_6wk),
+    open_estimated_runway_hours: num(s.open_estimated_runway_hours),
+    runway_weeks: numOrNull(s.runway_weeks),
+
+    // NULL, not false, on Jira projects — they carry no billable_status, so
+    // "did write-off drift?" is unanswerable rather than answered "no".
+    sig_writeoff_drift: boolOrNull(s.sig_writeoff_drift),
+    writeoff_pct: numOrNull(s.writeoff_pct),
+    writeoff_baseline_pct: numOrNull(s.writeoff_baseline_pct),
+    non_billable_hours: num(s.non_billable_hours),
+
+    sig_coverage_decay: Boolean(s.sig_coverage_decay),
+    recent_adoption_pct: numOrNull(s.recent_adoption_pct),
+    prior_adoption_pct: numOrNull(s.prior_adoption_pct),
+    recent_unestimated_hours: num(s.recent_unestimated_hours),
+  }
+}
+
+/**
  * The attention queue: every in-scope project with at least one firing signal,
  * ranked by §5 exposure.
  *
@@ -1249,7 +1311,9 @@ export async function fetchRadarQueue(): Promise<RadarQueueRow[]> {
   if (signals.error) throw signals.error
 
   const byId = new Map(
-    ((signals.data ?? []) as unknown as ProjectSignals[]).map((s) => [s.project_id, s]),
+    ((signals.data ?? []) as unknown as Record<string, unknown>[])
+      .map(normalizeSignals)
+      .map((s) => [s.project_id, s]),
   )
 
   const rows: RadarQueueRow[] = []
