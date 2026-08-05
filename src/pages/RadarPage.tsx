@@ -13,6 +13,7 @@ import {
   type ProjectMonthHours,
   type CompanyVitals,
 } from '@/lib/queries'
+import { describeError } from '@/lib/errors'
 import { FreshnessStamp } from '@/components/radar/FreshnessStamp'
 import { AttentionQueue } from '@/components/radar/AttentionQueue'
 import { BleedingNow } from '@/components/radar/BleedingNow'
@@ -21,6 +22,17 @@ import { VitalsTiles } from '@/components/radar/VitalsTiles'
 
 /** Sparkline + vitals window. Monthly grain — see VitalsTiles' note. */
 const TREND_MONTHS = 12
+
+/**
+ * Which sections can fail independently.
+ *
+ * Radar loads six queries. `Promise.all` would let one failure blank all three
+ * blocks, and an early-warning page that goes dark because a vitals tile timed
+ * out is worse than one showing four of five sections. Each section therefore
+ * carries its own failure, and a section that failed says so instead of
+ * rendering its empty state.
+ */
+type SectionKey = 'queue' | 'burning' | 'approaching' | 'vitals'
 
 /**
  * Radar — the landing page (plan §4.1).
@@ -43,31 +55,49 @@ export function RadarPage() {
   const [untagged, setUntagged] = useState(0)
   const [assignees, setAssignees] = useState<Map<number, string>>(new Map())
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [failed, setFailed] = useState<Partial<Record<SectionKey, string>>>({})
 
   useEffect(() => {
     let cancelled = false
 
     async function load() {
-      try {
-        const [queueRows, burningRows, approachingRows, monthHours, vitalRows, untaggedCount] =
-          await Promise.all([
-            fetchRadarQueue(),
-            fetchBurningTasks(),
-            fetchApproachingTasks(),
-            fetchProjectMonthHours(TREND_MONTHS),
-            fetchCompanyVitals(TREND_MONTHS),
-            fetchUntaggedActiveProjects(),
-          ])
-        if (cancelled) return
+      const [queueR, burningR, approachingR, monthsR, vitalsR, untaggedR] = await Promise.allSettled(
+        [
+          fetchRadarQueue(),
+          fetchBurningTasks(),
+          fetchApproachingTasks(),
+          fetchProjectMonthHours(TREND_MONTHS),
+          fetchCompanyVitals(TREND_MONTHS),
+          fetchUntaggedActiveProjects(),
+        ],
+      )
+      if (cancelled) return
 
+      const problems: Partial<Record<SectionKey, string>> = {}
+
+      if (queueR.status === 'fulfilled') setQueue(queueR.value)
+      else problems.queue = describeError(queueR.reason)
+
+      if (burningR.status === 'fulfilled') setBurning(burningR.value)
+      else problems.burning = describeError(burningR.reason)
+
+      if (approachingR.status === 'fulfilled') setApproaching(approachingR.value)
+      else problems.approaching = describeError(approachingR.reason)
+
+      if (vitalsR.status === 'fulfilled') setVitals(vitalsR.value)
+      else problems.vitals = describeError(vitalsR.reason)
+
+      // The sparklines and the untagged alarm are decoration on top of the
+      // queue, not the queue itself — losing either degrades a row rather than
+      // failing the section, so neither raises a section error.
+      if (monthsR.status === 'fulfilled') {
         // A month a project logged nothing in has no row at all. Plot it as a
         // zero rather than closing the gap — a flat line through a dead month
         // is exactly the shape a spinning-then-silent project should show.
         const axis = monthAxis(TREND_MONTHS)
         const hoursByProjectMonth = new Map<string, number>()
         const projectIds = new Set<number>()
-        for (const row of monthHours) {
+        for (const row of monthsR.value) {
           hoursByProjectMonth.set(`${row.project_id}|${row.month.slice(0, 10)}`, row.hours)
           projectIds.add(row.project_id)
         }
@@ -82,23 +112,25 @@ export function RadarPage() {
             })),
           )
         }
-
-        setQueue(queueRows)
         setSeries(byProject)
-        setBurning(burningRows)
-        setApproaching(approachingRows)
-        setVitals(vitalRows)
-        setUntagged(untaggedCount)
+      }
+      if (untaggedR.status === 'fulfilled') setUntagged(untaggedR.value)
 
-        const ids = [...burningRows, ...approachingRows]
-          .map((t) => t.assignee_id)
-          .filter((id): id is number => id != null)
+      setFailed(problems)
+      setLoading(false)
+
+      const ids = [
+        ...(burningR.status === 'fulfilled' ? burningR.value : []),
+        ...(approachingR.status === 'fulfilled' ? approachingR.value : []),
+      ]
+        .map((t) => t.assignee_id)
+        .filter((id): id is number => id != null)
+      try {
         const names = await fetchUserNames(ids)
         if (!cancelled) setAssignees(names)
-      } catch (e: unknown) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
-      } finally {
-        if (!cancelled) setLoading(false)
+      } catch {
+        // Names are a nicety; the rows carry task, project, band and hours
+        // without them. Never fail a row over a missing display name.
       }
     }
 
@@ -121,16 +153,11 @@ export function RadarPage() {
         <FreshnessStamp />
       </div>
 
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-          Radar could not load: {error}
-        </div>
-      )}
-
       <AttentionQueue
         rows={queue}
         series={series}
         loading={loading}
+        error={failed.queue}
         untaggedActiveProjects={untagged}
       />
 
@@ -142,12 +169,19 @@ export function RadarPage() {
             estimate or about to be.
           </p>
         </div>
-        <QueueDepthNotice burning={burning.length} approaching={approaching.length} loading={loading} />
+        <QueueDepthNotice
+          burning={burning.length}
+          approaching={approaching.length}
+          loading={loading}
+          incomplete={Boolean(failed.burning || failed.approaching)}
+        />
         <BleedingNow
           burning={burning}
           approaching={approaching}
           assignees={assignees}
           loading={loading}
+          burningError={failed.burning}
+          approachingError={failed.approaching}
         />
       </div>
 
@@ -158,7 +192,7 @@ export function RadarPage() {
             The slow-moving numbers nobody was watching. Monthly, last {TREND_MONTHS} months.
           </p>
         </div>
-        <VitalsTiles vitals={vitals} loading={loading} />
+        <VitalsTiles vitals={vitals} loading={loading} error={failed.vitals} />
       </div>
 
       <p className="text-[11px] leading-relaxed text-neutral-400">

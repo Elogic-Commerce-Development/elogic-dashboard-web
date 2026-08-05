@@ -121,6 +121,7 @@ function BleedingList({
   assignees,
   loading,
   emptyText,
+  error,
 }: {
   title: string
   blurb: string
@@ -129,6 +130,8 @@ function BleedingList({
   assignees: Map<number, string>
   loading: boolean
   emptyText: string
+  /** Set when this list's query failed — must not render as "nothing here". */
+  error?: string
 }) {
   const [expanded, setExpanded] = useState(false)
   const ranked = [...tasks].sort(
@@ -145,12 +148,17 @@ function BleedingList({
           <p className="text-xs text-neutral-500">{blurb}</p>
         </div>
         <span className="text-xs tabular-nums text-neutral-500">
-          {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}
+          {error ? '—' : `${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}`}
         </span>
       </header>
 
       {loading ? (
         <p className="px-3 py-6 text-sm text-neutral-500">Loading…</p>
+      ) : error ? (
+        <p className="px-3 py-6 text-sm text-red-700">
+          <span className="font-medium">This list could not be loaded.</span> Not an all-clear —
+          nothing was evaluated. <code className="text-xs">{error}</code>
+        </p>
       ) : ranked.length === 0 ? (
         <p className="px-3 py-6 text-sm text-neutral-500">{emptyText}</p>
       ) : (
@@ -206,11 +214,15 @@ export function BleedingNow({
   approaching,
   assignees,
   loading,
+  burningError,
+  approachingError,
 }: {
   burning: BleedingTask[]
   approaching: BleedingTask[]
   assignees: Map<number, string>
   loading: boolean
+  burningError?: string
+  approachingError?: string
 }) {
   return (
     <div className="grid gap-3 lg:grid-cols-2">
@@ -221,6 +233,7 @@ export function BleedingNow({
         kind="burning"
         assignees={assignees}
         loading={loading}
+        error={burningError}
         emptyText="Nothing open is past estimate and still burning."
       />
       <BleedingList
@@ -230,6 +243,7 @@ export function BleedingNow({
         kind="approaching"
         assignees={assignees}
         loading={loading}
+        error={approachingError}
         emptyText="No open task is inside the 80–100% band."
       />
     </div>

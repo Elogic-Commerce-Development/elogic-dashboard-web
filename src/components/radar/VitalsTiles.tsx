@@ -101,7 +101,24 @@ function Tile({
  * monthly view at all, so that tile shows the current scope split without a
  * trend. Both are recorded as F3 deviations in docs/progress-log.md.
  */
-export function VitalsTiles({ vitals, loading }: { vitals: CompanyVitals | null; loading: boolean }) {
+export function VitalsTiles({
+  vitals,
+  loading,
+  error,
+}: {
+  vitals: CompanyVitals | null
+  loading: boolean
+  error?: string
+}) {
+  if (!loading && error) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <span className="font-medium">Company vitals could not be loaded.</span>{' '}
+        <code className="text-xs">{error}</code>
+      </div>
+    )
+  }
+
   if (loading || !vitals) {
     return (
       <div className="rounded-lg border border-neutral-200 bg-white px-4 py-6 text-sm text-neutral-500">
