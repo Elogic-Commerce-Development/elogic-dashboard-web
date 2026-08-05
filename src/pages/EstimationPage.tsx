@@ -5,13 +5,12 @@ import { CalibrationBlock, type CalibrationData } from '@/components/estimation/
 import { OverrunBlock, type OverrunData } from '@/components/estimation/OverrunBlock'
 import { describeError } from '@/lib/errors'
 import {
-  fetchCalibrationByProject,
   fetchCalibrationSample,
   fetchCoverageBySegment,
   fetchCoverageByProject,
   fetchCoverageTrend,
+  fetchMetricConfig,
   fetchRealizedOverrunByPerson,
-  fetchRealizedOverrunByProject,
   fetchRealizedOverrunTasks,
   fetchUnassignedBucket,
   fetchUnestimatedByPerson,
@@ -27,8 +26,8 @@ const EMPTY_COVERAGE: CoverageData = {
   people: [],
   unassigned: null,
 }
-const EMPTY_CALIBRATION: CalibrationData = { sample: [], projects: [], zeroTracked: null }
-const EMPTY_OVERRUN: OverrunData = { projects: [], people: [], tasks: [] }
+const EMPTY_CALIBRATION: CalibrationData = { sample: [], zeroTracked: null, exactMatchFlagPct: 40 }
+const EMPTY_OVERRUN: OverrunData = { people: [], tasks: [] }
 
 /**
  * Estimation (plan §4.2) — "Is our work priced, and are the prices right?"
@@ -52,7 +51,20 @@ const EMPTY_OVERRUN: OverrunData = { projects: [], people: [], tasks: [] }
  * internal work carries no estimates by design, and blending it in would
  * manufacture a coverage problem that is really a business-model difference.
  *
- * Failures are per block (F3's lesson): a page whose query died must never
+ * ── Load shape (this is load-bearing, not tidiness) ─────────────────────────
+ *
+ * The blocks load in **waves**, and each renders as its wave lands. The first
+ * deployed build fired all eleven queries at once and the two task-grain
+ * fetches came back `57014 canceling statement due to statement timeout` — the
+ * `authenticated` role's 8s cap. Radar is the control: it fires thirteen
+ * concurrent queries and none exceeds 4.1s. The difference is that this page
+ * was the first consumer of the `*_by_project` / `*_by_segment` rollups, which
+ * cost ~7.6s each because S6/R12 only wrapped the *person* variants in a
+ * MATERIALIZED CTE. Two of those rollups are now computed from rows already on
+ * the page (see `lib/estimation.ts`), and what remains is staged so the heavy
+ * task-grain fetches never run alongside each other.
+ *
+ * Failures stay per block (F3's lesson): a page whose query died must never
  * render "0h unestimated", which here would be the best news the company has
  * ever had.
  */
@@ -60,74 +72,84 @@ export function EstimationPage() {
   const [coverage, setCoverage] = useState<CoverageData>(EMPTY_COVERAGE)
   const [calibration, setCalibration] = useState<CalibrationData>(EMPTY_CALIBRATION)
   const [overrun, setOverrun] = useState<OverrunData>(EMPTY_OVERRUN)
-  const [loading, setLoading] = useState(true)
+  const [pending, setPending] = useState<Record<BlockKey, boolean>>({
+    coverage: true,
+    calibration: true,
+    overrun: true,
+  })
   const [failed, setFailed] = useState<Partial<Record<BlockKey, string>>>({})
 
   useEffect(() => {
     let cancelled = false
 
+    const fail = (key: BlockKey, reason: unknown) => {
+      if (!cancelled) setFailed((f) => ({ ...f, [key]: describeError(reason) }))
+    }
+    const done = (key: BlockKey) => {
+      if (!cancelled) setPending((p) => ({ ...p, [key]: false }))
+    }
+
     async function load() {
-      const [
-        segments,
-        trend,
-        coverageProjects,
-        people,
-        unassigned,
-        sample,
-        calibrationProjects,
-        zeroTracked,
-        overrunProjects,
-        overrunPeople,
-        overrunTasks,
-      ] = await Promise.allSettled([
+      // ── Wave 1: the pre-aggregated coverage views. ────────────────────────
+      const [segments, trend, projects, people] = await Promise.allSettled([
         fetchCoverageBySegment(),
         fetchCoverageTrend(),
         fetchCoverageByProject(),
         fetchUnestimatedByPerson(),
-        fetchUnassignedBucket(),
-        fetchCalibrationSample(),
-        fetchCalibrationByProject(),
-        fetchZeroTracked(),
-        fetchRealizedOverrunByProject(),
-        fetchRealizedOverrunByPerson(),
-        fetchRealizedOverrunTasks(),
       ])
       if (cancelled) return
-
-      const problems: Partial<Record<BlockKey, string>> = {}
-      // The first rejection in a block names the block's failure. Anything
-      // whose absence only degrades a row (the unassigned tally, the
-      // zero-tracked count) is nulled instead, so one soft query cannot black
-      // out a block that has real numbers to show.
-      const firstError = (key: BlockKey, results: PromiseSettledResult<unknown>[]) => {
-        const bad = results.find((r) => r.status === 'rejected')
-        if (bad && bad.status === 'rejected') problems[key] = describeError(bad.reason)
-      }
-
-      firstError('coverage', [segments, trend, coverageProjects, people])
-      firstError('calibration', [sample, calibrationProjects])
-      firstError('overrun', [overrunProjects, overrunPeople, overrunTasks])
-
+      const coverageFailure = [segments, trend, projects, people].find((r) => r.status === 'rejected')
+      if (coverageFailure && coverageFailure.status === 'rejected') fail('coverage', coverageFailure.reason)
       setCoverage({
         segments: segments.status === 'fulfilled' ? segments.value : [],
         trend: trend.status === 'fulfilled' ? trend.value : [],
-        projects: coverageProjects.status === 'fulfilled' ? coverageProjects.value : [],
+        projects: projects.status === 'fulfilled' ? projects.value : [],
         people: people.status === 'fulfilled' ? people.value : [],
-        unassigned: unassigned.status === 'fulfilled' ? unassigned.value : null,
+        unassigned: null,
       })
+      done('coverage')
+
+      // ── Wave 2: the calibration sample (task grain, alone) + two cheap reads.
+      const [sample, zeroTracked, config] = await Promise.allSettled([
+        fetchCalibrationSample(),
+        fetchZeroTracked(),
+        fetchMetricConfig(),
+      ])
+      if (cancelled) return
+      if (sample.status === 'rejected') fail('calibration', sample.reason)
       setCalibration({
         sample: sample.status === 'fulfilled' ? sample.value : [],
-        projects: calibrationProjects.status === 'fulfilled' ? calibrationProjects.value : [],
         zeroTracked: zeroTracked.status === 'fulfilled' ? zeroTracked.value : null,
+        // The threshold has a canonical default in the view; falling back to it
+        // only affects whether a "flag" pill renders, never a number.
+        exactMatchFlagPct: config.status === 'fulfilled' ? config.value.exact_match_flag_pct : 40,
       })
-      setOverrun({
-        projects: overrunProjects.status === 'fulfilled' ? overrunProjects.value : [],
-        people: overrunPeople.status === 'fulfilled' ? overrunPeople.value : [],
-        tasks: overrunTasks.status === 'fulfilled' ? overrunTasks.value : [],
-      })
+      done('calibration')
 
-      setFailed(problems)
-      setLoading(false)
+      // ── Wave 3: the realized-overrun tasks (task grain, alone) + the person
+      //    rollup, which is one of the two R12 already made fast.
+      const [tasks, overrunPeople] = await Promise.allSettled([
+        fetchRealizedOverrunTasks(),
+        fetchRealizedOverrunByPerson(),
+      ])
+      if (cancelled) return
+      const overrunFailure = [tasks, overrunPeople].find((r) => r.status === 'rejected')
+      if (overrunFailure && overrunFailure.status === 'rejected') fail('overrun', overrunFailure.reason)
+      setOverrun({
+        tasks: tasks.status === 'fulfilled' ? tasks.value : [],
+        people: overrunPeople.status === 'fulfilled' ? overrunPeople.value : [],
+      })
+      done('overrun')
+
+      // ── Wave 4: the Unassigned tally. Last on purpose — it is one line of
+      //    the coverage block, so it is the one query allowed to keep the
+      //    reader waiting, and its absence degrades a row rather than a block.
+      try {
+        const unassigned = await fetchUnassignedBucket()
+        if (!cancelled) setCoverage((c) => ({ ...c, unassigned }))
+      } catch {
+        // Renders as "not measured" — never as zero unassigned tasks.
+      }
     }
 
     void load()
@@ -150,16 +172,17 @@ export function EstimationPage() {
         <FreshnessStamp />
       </div>
 
-      <CoverageBlock data={coverage} loading={loading} error={failed.coverage} />
-      <CalibrationBlock data={calibration} loading={loading} error={failed.calibration} />
-      <OverrunBlock data={overrun} loading={loading} error={failed.overrun} />
+      <CoverageBlock data={coverage} loading={pending.coverage} error={failed.coverage} />
+      <CalibrationBlock data={calibration} loading={pending.calibration} error={failed.calibration} />
+      <OverrunBlock data={overrun} loading={pending.overrun} error={failed.overrun} />
 
       <div className="space-y-1.5 border-t border-neutral-200 pt-3 text-[11px] leading-relaxed text-neutral-400">
         <p>
           Every figure reads a canonical <code>v_metric_*</code> view; no threshold or predicate is
           computed in the browser. Ratios are actual ÷ estimate on completed tasks with both sides
-          above zero; the in-band window (0.8–1.2) and the exact-match window live in{' '}
-          <code>v_metric_config</code> on the database and are retuned there, never here.
+          above zero; the in-band window (0.8–1.2) and the exact-match trust threshold live in{' '}
+          <code>v_metric_config</code> on the database, and this page reads that row rather than
+          writing the numbers down.
         </p>
         <p>
           Per-project and per-person rows are rounded to one decimal before they are summed, so a

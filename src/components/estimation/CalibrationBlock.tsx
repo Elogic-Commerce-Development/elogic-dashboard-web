@@ -8,21 +8,24 @@ import {
   bySize,
   bySource,
   byQuarter,
+  calibrationByProject,
   histogram,
   formatPct,
   formatRatioX,
   segmentLabel,
   summarize,
   type CalibrationSummary,
+  type ProjectCalibration,
 } from '@/lib/estimation'
-import type { CalibrationTask, ProjectCalibrationRow, ZeroTracked } from '@/lib/queries'
+import type { CalibrationTask, ZeroTracked } from '@/lib/queries'
 import { CalibrationTrendChart, RatioHistogram } from './CalibrationCharts'
 import { Block, Chip, LoadFailure, Loading, Panel, StatTile } from './Section'
 
 export type CalibrationData = {
   sample: CalibrationTask[]
-  projects: ProjectCalibrationRow[]
   zeroTracked: ZeroTracked | null
+  /** §5's exact-match trust threshold, read from `v_metric_config`. */
+  exactMatchFlagPct: number
 }
 
 /** Shared header for the three summary cuts, so they read as one instrument. */
@@ -77,7 +80,7 @@ function CutTable<T extends { key: string; summary: CalibrationSummary }>({
   )
 }
 
-const PROJECT_COLUMNS: ColumnDef<ProjectCalibrationRow>[] = [
+const PROJECT_COLUMNS: ColumnDef<ProjectCalibration>[] = [
   {
     accessorKey: 'project_name',
     header: 'Project',
@@ -96,13 +99,15 @@ const PROJECT_COLUMNS: ColumnDef<ProjectCalibrationRow>[] = [
     ),
   },
   {
-    accessorKey: 'n',
+    id: 'n',
     header: 'n',
+    accessorFn: (row) => row.summary.n,
     cell: ({ getValue }) => <span className="tabular-nums">{Number(getValue())}</span>,
   },
   {
-    accessorKey: 'median_ratio',
+    id: 'median_ratio',
     header: 'Median ratio',
+    accessorFn: (row) => row.summary.median_ratio,
     cell: ({ getValue }) => {
       const v = getValue() as number | null
       const cls = v == null ? '' : v >= 2 ? 'text-red-600' : v >= 1.5 ? 'text-amber-600' : ''
@@ -110,8 +115,9 @@ const PROJECT_COLUMNS: ColumnDef<ProjectCalibrationRow>[] = [
     },
   },
   {
-    accessorKey: 'in_band_pct',
+    id: 'in_band_pct',
     header: 'In band',
+    accessorFn: (row) => row.summary.in_band_pct,
     cell: ({ getValue }) => (
       <span className="font-medium tabular-nums text-emerald-700">
         {formatPct(getValue() as number | null)}
@@ -119,11 +125,12 @@ const PROJECT_COLUMNS: ColumnDef<ProjectCalibrationRow>[] = [
     ),
   },
   {
-    accessorKey: 'exact_match_pct',
+    id: 'exact_match_pct',
     header: 'Exact match',
+    accessorFn: (row) => row.summary.exact_match_pct,
     cell: ({ row }) => (
       <span className="tabular-nums text-neutral-600">
-        {formatPct(row.original.exact_match_pct)}
+        {formatPct(row.original.summary.exact_match_pct)}
         {row.original.exact_match_flagged ? (
           <span
             className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold uppercase text-amber-800"
@@ -136,14 +143,11 @@ const PROJECT_COLUMNS: ColumnDef<ProjectCalibrationRow>[] = [
     ),
   },
   {
-    accessorKey: 'zero_tracked_tasks',
-    header: 'Est., never tracked',
-    cell: ({ row }) => (
-      <span className="tabular-nums text-neutral-600">
-        {row.original.zero_tracked_tasks === 0
-          ? '—'
-          : `${row.original.zero_tracked_tasks} / ${formatHours(row.original.zero_tracked_estimate_hours)}`}
-      </span>
+    id: 'blew_2x_pct',
+    header: 'Blew 2×',
+    accessorFn: (row) => row.summary.blew_2x_pct,
+    cell: ({ getValue }) => (
+      <span className="tabular-nums text-red-600">{formatPct(getValue() as number | null)}</span>
     ),
   },
 ]
@@ -171,6 +175,10 @@ export function CalibrationBlock({
   const quarters = useMemo(() => byQuarter(data.sample), [data.sample])
   const sizes = useMemo(() => bySize(data.sample), [data.sample])
   const sources = useMemo(() => bySource(data.sample), [data.sample])
+  const projects = useMemo(
+    () => calibrationByProject(data.sample, data.exactMatchFlagPct),
+    [data.sample, data.exactMatchFlagPct],
+  )
 
   const firstQuarter = quarters[0]
   const lastQuarter = quarters[quarters.length - 1]
@@ -287,10 +295,10 @@ export function CalibrationBlock({
           <Panel
             title="Calibration by project"
             blurb="Exact-match % beside in-band % at every grain, per §5's trust flag."
-            meta={`${data.projects.length} projects`}
+            meta={`${projects.length} projects`}
           >
             <DataTable
-              data={data.projects}
+              data={projects}
               columns={PROJECT_COLUMNS}
               emptyText="No project has a completed, tracked, estimated task."
             />

@@ -1,4 +1,4 @@
-import type { CalibrationTask } from './queries'
+import type { BlowoutTask, CalibrationTask } from './queries'
 
 /**
  * The client-side *cuts* of the §5 calibration sample (plan §4.2).
@@ -254,4 +254,93 @@ export function formatPct(value: number | null | undefined, digits = 1): string 
 export function formatRatioX(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return '—'
   return `${value.toFixed(2)}×`
+}
+
+/* ── Rollups that used to be database views ──────────────────────────────────
+ *
+ * `v_metric_calibration_by_project` and `v_metric_overrun_by_project` were the
+ * page's first consumers, and each cost ~7.6s against production — they roll up
+ * `v_metric_tasks` the same way `v_metric_{overrun,calibration}_by_person` did
+ * before S6/R12 wrapped those in a MATERIALIZED CTE. The person views were
+ * repaired because F2 needed them; these two were never consumed, so they were
+ * never fixed, and eleven concurrent queries around them pushed this page's two
+ * task-grain fetches past the API role's 8s statement timeout.
+ *
+ * Both are therefore rolled up here, from rows the page has already fetched.
+ * Nothing is re-derived: `is_in_band` / `is_exact_match` / `ratio` /
+ * `overrun_realized_hours` all still come from `v_metric_tasks`, and the
+ * exact-match trust threshold is read from `v_metric_config` rather than
+ * written down here. The gain beyond speed is that both tables now provably
+ * reconcile with the rows rendered beside them.
+ *
+ * If a later backend session extends R12's treatment to the by_project views,
+ * these can go back to being straight reads.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+export type ProjectCalibration = {
+  project_id: number
+  project_name: string
+  source: string | null
+  work_model: string
+  summary: CalibrationSummary
+  exact_match_flagged: boolean
+}
+
+export function calibrationByProject(
+  tasks: CalibrationTask[],
+  exactMatchFlagPct: number,
+): ProjectCalibration[] {
+  const byProject = new Map<number, CalibrationTask[]>()
+  for (const t of tasks) {
+    const list = byProject.get(t.project_id)
+    if (list) list.push(t)
+    else byProject.set(t.project_id, [t])
+  }
+  return Array.from(byProject.values())
+    .map((list) => {
+      const summary = summarize(list)
+      return {
+        project_id: list[0].project_id,
+        project_name: list[0].project_name,
+        source: list[0].source,
+        work_model: list[0].work_model,
+        summary,
+        exact_match_flagged: (summary.exact_match_pct ?? 0) > exactMatchFlagPct,
+      }
+    })
+    .sort((a, b) => b.summary.n - a.summary.n || a.project_name.localeCompare(b.project_name))
+}
+
+export type ProjectOverrun = {
+  project_id: number
+  project_name: string
+  source: string | null
+  work_model: string
+  rate_band: string | null
+  realized_overrun_tasks: number
+  realized_overrun_hours: number
+}
+
+export function overrunByProject(tasks: BlowoutTask[]): ProjectOverrun[] {
+  const byProject = new Map<number, ProjectOverrun>()
+  for (const t of tasks) {
+    const acc = byProject.get(t.project_id)
+    if (acc) {
+      acc.realized_overrun_tasks += 1
+      acc.realized_overrun_hours += t.overrun_hours
+    } else {
+      byProject.set(t.project_id, {
+        project_id: t.project_id,
+        project_name: t.project_name,
+        source: t.source,
+        work_model: t.work_model,
+        rate_band: t.rate_band,
+        realized_overrun_tasks: 1,
+        realized_overrun_hours: t.overrun_hours,
+      })
+    }
+  }
+  return Array.from(byProject.values()).sort(
+    (a, b) => b.realized_overrun_hours - a.realized_overrun_hours,
+  )
 }

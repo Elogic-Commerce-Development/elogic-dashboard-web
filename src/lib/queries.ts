@@ -1766,11 +1766,9 @@ export async function fetchUnassignedBucket(): Promise<UnassignedBucket> {
  */
 export type CalibrationTask = {
   task_id: number
-  task_name: string
   project_id: number
   project_name: string
   source: string | null
-  task_jira_key: string | null
   work_model: string
   estimate_hours: number
   actual_hours: number
@@ -1784,7 +1782,7 @@ export async function fetchCalibrationSample(): Promise<CalibrationTask[]> {
   const rows = await fetchAllPages<Record<string, unknown>>((from, to) =>
     supabase
       .from('v_metric_tasks')
-      .select('task_id, task_name, project_id, project_name, source, task_jira_key, work_model, estimate_hours, actual_hours, ratio, completed_on, is_in_band, is_exact_match')
+      .select('task_id, project_id, project_name, source, work_model, estimate_hours, actual_hours, ratio, completed_on, is_in_band, is_exact_match')
       .eq('is_estimating_segment', true)
       .eq('is_calibration_sample', true)
       .order('task_id', { ascending: true })
@@ -1792,11 +1790,9 @@ export async function fetchCalibrationSample(): Promise<CalibrationTask[]> {
   )
   return rows.map((r) => ({
     task_id: Number(r.task_id),
-    task_name: String(r.task_name ?? ''),
     project_id: Number(r.project_id),
     project_name: String(r.project_name ?? ''),
     source: (r.source as string | null) ?? null,
-    task_jira_key: (r.task_jira_key as string | null) ?? null,
     work_model: String(r.work_model ?? 'unclassified'),
     estimate_hours: Number(r.estimate_hours ?? 0),
     actual_hours: Number(r.actual_hours ?? 0),
@@ -1804,45 +1800,6 @@ export async function fetchCalibrationSample(): Promise<CalibrationTask[]> {
     completed_on: (r.completed_on as string | null) ?? null,
     is_in_band: Boolean(r.is_in_band),
     is_exact_match: Boolean(r.is_exact_match),
-  }))
-}
-
-export type ProjectCalibrationRow = {
-  project_id: number
-  project_name: string
-  source: string | null
-  work_model: string
-  n: number
-  median_ratio: number | null
-  mean_ratio: number | null
-  in_band_pct: number | null
-  exact_match_pct: number | null
-  exact_match_flagged: boolean
-  zero_tracked_tasks: number
-  zero_tracked_estimate_hours: number
-}
-
-/** §4.2: "exact-match% shown beside in-band% at every grain" — project grain. */
-export async function fetchCalibrationByProject(): Promise<ProjectCalibrationRow[]> {
-  const { data, error } = await supabase
-    .from('v_metric_calibration_by_project')
-    .select('project_id, project_name, source, work_model, n, median_ratio, mean_ratio, in_band_pct, exact_match_pct, exact_match_flagged, zero_tracked_tasks, zero_tracked_estimate_hours')
-    .in('work_model', ESTIMATING_SEGMENTS)
-    .order('n', { ascending: false })
-  if (error) throw error
-  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
-    project_id: Number(r.project_id),
-    project_name: String(r.project_name ?? ''),
-    source: (r.source as string | null) ?? null,
-    work_model: String(r.work_model ?? 'unclassified'),
-    n: Number(r.n ?? 0),
-    median_ratio: r.median_ratio == null ? null : Number(r.median_ratio),
-    mean_ratio: r.mean_ratio == null ? null : Number(r.mean_ratio),
-    in_band_pct: r.in_band_pct == null ? null : Number(r.in_band_pct),
-    exact_match_pct: r.exact_match_pct == null ? null : Number(r.exact_match_pct),
-    exact_match_flagged: Boolean(r.exact_match_flagged),
-    zero_tracked_tasks: Number(r.zero_tracked_tasks ?? 0),
-    zero_tracked_estimate_hours: Number(r.zero_tracked_estimate_hours ?? 0),
   }))
 }
 
@@ -1865,40 +1822,6 @@ export async function fetchZeroTracked(): Promise<ZeroTracked> {
     tasks: rows.reduce((s, r) => s + Number(r.zero_tracked_tasks ?? 0), 0),
     estimate_hours: rows.reduce((s, r) => s + Number(r.zero_tracked_estimate_hours ?? 0), 0),
   }
-}
-
-export type ProjectOverrunRow = {
-  project_id: number
-  project_name: string
-  source: string | null
-  work_model: string
-  rate_band: string | null
-  realized_overrun_tasks: number
-  realized_overrun_hours: number
-}
-
-/**
- * §4.2's overrun economics is **realized** — completed work, where the bill is
- * already known. Live overrun is Radar's job (§4.1) and carries D3's bucket
- * exclusion; mixing the two here would put a moving number next to a settled
- * one under one heading.
- */
-export async function fetchRealizedOverrunByProject(): Promise<ProjectOverrunRow[]> {
-  const { data, error } = await supabase
-    .from('v_metric_overrun_by_project')
-    .select('project_id, project_name, source, work_model, rate_band, realized_overrun_tasks, realized_overrun_hours')
-    .in('work_model', ESTIMATING_SEGMENTS)
-    .order('realized_overrun_hours', { ascending: false })
-  if (error) throw error
-  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
-    project_id: Number(r.project_id),
-    project_name: String(r.project_name ?? ''),
-    source: (r.source as string | null) ?? null,
-    work_model: String(r.work_model ?? 'unclassified'),
-    rate_band: (r.rate_band as string | null) ?? null,
-    realized_overrun_tasks: Number(r.realized_overrun_tasks ?? 0),
-    realized_overrun_hours: Number(r.realized_overrun_hours ?? 0),
-  }))
 }
 
 export type PersonOverrunRow = {
@@ -1941,6 +1864,8 @@ export type BlowoutTask = {
   project_name: string
   source: string | null
   task_jira_key: string | null
+  work_model: string
+  rate_band: string | null
   estimate_hours: number
   actual_hours: number
   overrun_hours: number
@@ -1962,7 +1887,7 @@ export async function fetchRealizedOverrunTasks(): Promise<BlowoutTask[]> {
   const rows = await fetchAllPages<Record<string, unknown>>((from, to) =>
     supabase
       .from('v_metric_tasks')
-      .select('task_id, task_name, project_id, project_name, source, task_jira_key, estimate_hours, actual_hours, overrun_realized_hours, ratio, completed_on')
+      .select('task_id, task_name, project_id, project_name, source, task_jira_key, work_model, rate_band, estimate_hours, actual_hours, overrun_realized_hours, ratio, completed_on')
       .eq('is_estimating_segment', true)
       .eq('is_completed', true)
       .eq('is_estimated', true)
@@ -1978,10 +1903,41 @@ export async function fetchRealizedOverrunTasks(): Promise<BlowoutTask[]> {
     project_name: String(r.project_name ?? ''),
     source: (r.source as string | null) ?? null,
     task_jira_key: (r.task_jira_key as string | null) ?? null,
+    work_model: String(r.work_model ?? 'unclassified'),
+    rate_band: (r.rate_band as string | null) ?? null,
     estimate_hours: Number(r.estimate_hours ?? 0),
     actual_hours: Number(r.actual_hours ?? 0),
     overrun_hours: Number(r.overrun_realized_hours ?? 0),
     ratio: r.ratio == null ? null : Number(r.ratio),
     completed_on: (r.completed_on as string | null) ?? null,
   }))
+}
+
+/**
+ * `v_metric_config` — the one row every threshold lives in (§4.1).
+ *
+ * The page reads it so that a rollup computed in the browser still compares
+ * against the database's number rather than a literal. That matters here
+ * because F4's load-shape repair moved the per-project calibration rollup
+ * client-side: the *aggregation* moved, the *threshold* did not.
+ *
+ * Free to query — the view is a single row of constants with no dependency on
+ * `v_metric_tasks`, so it costs nothing next to the rollups it replaces.
+ */
+export type MetricConfig = { exact_match_flag_pct: number; person_min_sample: number }
+
+export async function fetchMetricConfig(): Promise<MetricConfig> {
+  const { data, error } = await supabase
+    .from('v_metric_config')
+    .select('exact_match_flag_pct, person_min_sample')
+    .single()
+  if (error) throw error
+  const row = data as { exact_match_flag_pct: number | null; person_min_sample: number | null }
+  return {
+    exact_match_flag_pct: Number(row?.exact_match_flag_pct ?? 40),
+    // §4.5's suppression floor. Read from the database for the same reason the
+    // exact-match threshold is: the People page decides what NOT to show from
+    // it, and a literal here would drift away from `meets_sample_floor`.
+    person_min_sample: Number(row?.person_min_sample ?? 10),
+  }
 }
