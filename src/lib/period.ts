@@ -95,7 +95,25 @@ export const PERIOD_GROUPS = {
     secondary: ['previous_month', 'current_year', 'previous_year', 'all_time', 'custom'],
     default: 'current_month',
   },
-  /** Overview / Estimates / People / Projects list grids. */
+  /**
+   * People / Projects — the canonical grids (F2).
+   *
+   * Deliberately narrower than `list`. These two grids read the §5 metric
+   * views, which exist at exactly two grains: all-time, and one calendar
+   * month. Any other range would have to sum month rows, and the month views'
+   * task counters are distinct *per month* — summing them double-counts every
+   * task worked across a boundary (+30% person / +56% project over the full
+   * range). Offering a preset the data cannot answer exactly is how a live
+   * management dashboard grows a wrong number, so it is not offered.
+   * F5/F6 widen this again on top of a period-grain view (see the progress
+   * log's F2 open question).
+   */
+  grid: {
+    primary: ['all_time', 'current_month', 'previous_month'],
+    secondary: [],
+    default: 'all_time',
+  },
+  /** Overview / Estimates list grids (both on the F4 kill list). */
   list: {
     primary: ['all_time', 'current_month', 'previous_month'],
     secondary: [

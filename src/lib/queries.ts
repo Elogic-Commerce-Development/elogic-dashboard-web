@@ -96,26 +96,6 @@ export type ContributorStats = {
   qa_iterations_tasks: number
 }
 
-export type ProjectStats = {
-  project_id: number
-  project_name: string
-  tasks_with_time: number
-  unestimated_tasks: number
-  overrun_tasks: number
-  total_hours: number
-  hours_on_unestimated: number
-  hours_on_overrun: number
-  team_members: number
-  avg_qa_bugs: number | null
-  qa_bugs_tasks: number
-  avg_qa_iterations: number | null
-  qa_iterations_tasks: number
-  /** Project completion flag — Projects grid defaults to active (false). */
-  is_completed: boolean
-  source: string | null
-  jira_key: string | null
-}
-
 export type ContributorTaskSummary = {
   contributor_id: number
   contributor_name: string
@@ -461,28 +441,6 @@ export async function fetchProjectCompletedMap(): Promise<Map<number, boolean>> 
   return new Map(projects.map((p) => [p.id, Boolean(p.is_completed)]))
 }
 
-/**
- * user_id → class map for ALL users (no archive/role filter), so period-mode
- * aggregation can drop non-team contributors the same way the all-time
- * v_contributor_stats query does. Walks pages past the 1000-row cap.
- */
-export async function fetchUserClassMap(): Promise<Map<number, string | null>> {
-  const map = new Map<number, string | null>()
-  const PAGE = 1000
-  for (let offset = 0; ; offset += PAGE) {
-    const { data, error } = await supabase
-      .from('users')
-      .select('id, class')
-      .order('id')
-      .range(offset, offset + PAGE - 1)
-    if (error) throw error
-    const rows = (data ?? []) as { id: number; class: string | null }[]
-    for (const r of rows) map.set(r.id, r.class)
-    if (rows.length < PAGE) break
-  }
-  return map
-}
-
 export async function fetchUsers(): Promise<UserListItem[]> {
   const { data, error } = await supabase
     .from('users')
@@ -492,29 +450,6 @@ export async function fetchUsers(): Promise<UserListItem[]> {
     .order('display_name', { ascending: true })
   if (error) throw error
   return (data ?? []) as UserListItem[]
-}
-
-export async function fetchContributorStats(userIds: number[] = []): Promise<ContributorStats[]> {
-  let q = supabase
-    .from('v_contributor_stats')
-    .select('*')
-    .in('class', TEAM_ROLES) // People grid: Owner/Member only, drop Client/Client+
-    .order('total_hours', { ascending: false })
-  if (userIds.length > 0) q = q.in('contributor_id', userIds)
-  const { data, error } = await q
-  if (error) throw error
-  return (data ?? []) as ContributorStats[]
-}
-
-export async function fetchProjectStats(projectIds: number[] = []): Promise<ProjectStats[]> {
-  let q = supabase
-    .from('v_project_stats')
-    .select('*')
-    .order('total_hours', { ascending: false })
-  if (projectIds.length > 0) q = q.in('project_id', projectIds)
-  const { data, error } = await q
-  if (error) throw error
-  return (data ?? []) as ProjectStats[]
 }
 
 export async function fetchContributorTaskSummary(
@@ -769,6 +704,317 @@ export async function fetchTaskContributors(taskId: number): Promise<TaskContrib
     .order('hours', { ascending: false })
   if (error) throw error
   return (data ?? []) as TaskContributor[]
+}
+
+/* ── Canonical §5 metric layer (F2) ─────────────────────────────────────────
+ *
+ * The People and Projects grids read the `v_metric_*` family — the one SQL
+ * definition per metric that session S3/R5 shipped — instead of the legacy
+ * all-time `v_contributor_stats` / `v_project_stats` (whole company, back to
+ * 2017, no scope filter) and the client-side `periodStats.ts` re-aggregation.
+ *
+ * Two sources, one row shape:
+ *
+ *   all time     v_metric_coverage_by_{person,project} + v_metric_overrun_by_*
+ *   one month    v_metric_{person,project}_month  (R8)
+ *
+ * Only those two. The month views are grained per (grain, month), so their
+ * task counters are distinct *within a month* — summing several months
+ * double-counts any task worked in more than one (measured +30% person /
+ * +56% project across the full range), and the all-time views carry no date
+ * filter. A range that is neither "all" nor "exactly one month" therefore has
+ * no exact canonical source, which is why `PERIOD_GROUPS.grid` offers only
+ * these three presets. See docs/progress-log.md, F2.
+ *
+ * The two overrun columns differ in basis between the sources, deliberately
+ * and visibly (the grids re-label the header):
+ *   - all time  §5 attribution — the overrun *amount* (actual − estimate)
+ *               charged to whoever holds ≥40% of a task's hours;
+ *   - month     contribution — the grain's own hours on tasks that overran.
+ * Both are canonical; they answer different questions. Neither is a sum of
+ * the other, so they are never mixed inside one column.
+ */
+
+/** Shared row shape for both grids' two sources. */
+type MetricGridRow = {
+  hours: number
+  tasks: number
+  estimated_tasks: number
+  coverage_pct: number | null
+  overrun_tasks: number
+  overrun_hours: number
+}
+
+export type PersonMetricRow = MetricGridRow & {
+  user_id: number
+  display_name: string
+}
+
+export type ProjectMetricRow = MetricGridRow & {
+  project_id: number
+  project_name: string
+  source: string | null
+  is_completed: boolean
+}
+
+/**
+ * FilterBar user ids → canonical (R6-merged) ids.
+ *
+ * The canonical views key on the merged person, so a raw alias id — 16 of the
+ * 334 accounts — matches nothing. Selecting "Vladyslav Zdrachuk" (255) has to
+ * find the person's rows under 3579. Identity-mapped for everyone else, so
+ * this is a no-op for the other 318.
+ */
+export async function resolveCanonicalUserIds(userIds: number[]): Promise<number[]> {
+  if (userIds.length === 0) return []
+  const { data, error } = await supabase
+    .from('v_person_alias')
+    .select('user_id, canonical_user_id')
+    .in('user_id', userIds)
+  if (error) throw error
+  const rows = (data ?? []) as { user_id: number; canonical_user_id: number }[]
+  const byRaw = new Map(rows.map((r) => [r.user_id, r.canonical_user_id]))
+  return Array.from(new Set(userIds.map((id) => byRaw.get(id) ?? id)))
+}
+
+/** `2026-08-01` for the calendar month a period's start date falls in. */
+export function monthKey(from: string): string {
+  return `${from.slice(0, 7)}-01`
+}
+
+type CoverageByPerson = {
+  user_id: number
+  display_name: string
+  tasks: number
+  estimated_tasks: number
+  hours: number
+  estimated_hours: number
+}
+type OverrunByPerson = {
+  user_id: number
+  realized_overrun_tasks: number
+  realized_overrun_hours: number
+  live_overrun_tasks: number
+  live_overrun_hours: number
+}
+
+/**
+ * Coverage is grained per (person, is_estimating_segment), so a person who
+ * works across both segment classes has two rows. Roll them up before
+ * anything else reads a count.
+ */
+export async function fetchPersonMetricsAllTime(userIds: number[]): Promise<PersonMetricRow[]> {
+  const canonicalIds = await resolveCanonicalUserIds(userIds)
+
+  let covQ = supabase
+    .from('v_metric_coverage_by_person')
+    .select('user_id, display_name, tasks, estimated_tasks, hours, estimated_hours')
+  if (canonicalIds.length > 0) covQ = covQ.in('user_id', canonicalIds)
+
+  let ovrQ = supabase
+    .from('v_metric_overrun_by_person')
+    .select('user_id, realized_overrun_tasks, realized_overrun_hours, live_overrun_tasks, live_overrun_hours')
+  if (canonicalIds.length > 0) ovrQ = ovrQ.in('user_id', canonicalIds)
+
+  const [cov, ovr] = await Promise.all([covQ, ovrQ])
+  if (cov.error) throw cov.error
+  if (ovr.error) throw ovr.error
+
+  const overrun = new Map(
+    ((ovr.data ?? []) as OverrunByPerson[]).map((o) => [o.user_id, o]),
+  )
+
+  const byPerson = new Map<number, { display_name: string; tasks: number; estimated_tasks: number; hours: number; estimated_hours: number }>()
+  for (const r of (cov.data ?? []) as CoverageByPerson[]) {
+    const acc = byPerson.get(r.user_id)
+    if (acc) {
+      acc.tasks += Number(r.tasks)
+      acc.estimated_tasks += Number(r.estimated_tasks)
+      acc.hours += Number(r.hours)
+      acc.estimated_hours += Number(r.estimated_hours)
+    } else {
+      byPerson.set(r.user_id, {
+        display_name: r.display_name,
+        tasks: Number(r.tasks),
+        estimated_tasks: Number(r.estimated_tasks),
+        hours: Number(r.hours),
+        estimated_hours: Number(r.estimated_hours),
+      })
+    }
+  }
+
+  const rows: PersonMetricRow[] = []
+  for (const [user_id, a] of byPerson.entries()) {
+    const o = overrun.get(user_id)
+    rows.push({
+      user_id,
+      display_name: a.display_name,
+      hours: a.hours,
+      tasks: a.tasks,
+      estimated_tasks: a.estimated_tasks,
+      coverage_pct: a.hours > 0 ? (a.estimated_hours / a.hours) * 100 : null,
+      // §5 gross overrun — realized + live, never netted. The two are
+      // disjoint (a task is completed or it is open), so this is a count.
+      overrun_tasks: Number(o?.realized_overrun_tasks ?? 0) + Number(o?.live_overrun_tasks ?? 0),
+      overrun_hours: Number(o?.realized_overrun_hours ?? 0) + Number(o?.live_overrun_hours ?? 0),
+    })
+  }
+  return rows.sort((a, b) => b.hours - a.hours)
+}
+
+type PersonMonth = {
+  user_id: number
+  display_name: string
+  total_hours: number
+  tasks_touched: number
+  estimated_tasks: number
+  coverage_pct: number | null
+  realized_overrun_tasks_touched: number
+  hours_on_realized_overrun: number
+  live_overrun_tasks_touched: number
+  hours_on_live_overrun: number
+}
+
+export async function fetchPersonMetricsForMonth(
+  month: string,
+  userIds: number[],
+): Promise<PersonMetricRow[]> {
+  const canonicalIds = await resolveCanonicalUserIds(userIds)
+  let q = supabase
+    .from('v_metric_person_month')
+    .select(
+      'user_id, display_name, total_hours, tasks_touched, estimated_tasks, coverage_pct, realized_overrun_tasks_touched, hours_on_realized_overrun, live_overrun_tasks_touched, hours_on_live_overrun',
+    )
+    .eq('month', month)
+    .order('total_hours', { ascending: false })
+  if (canonicalIds.length > 0) q = q.in('user_id', canonicalIds)
+  const { data, error } = await q
+  if (error) throw error
+
+  return ((data ?? []) as PersonMonth[]).map((r) => ({
+    user_id: r.user_id,
+    display_name: r.display_name,
+    hours: Number(r.total_hours),
+    tasks: Number(r.tasks_touched),
+    estimated_tasks: Number(r.estimated_tasks),
+    coverage_pct: r.coverage_pct == null ? null : Number(r.coverage_pct),
+    overrun_tasks:
+      Number(r.realized_overrun_tasks_touched) + Number(r.live_overrun_tasks_touched),
+    overrun_hours: Number(r.hours_on_realized_overrun) + Number(r.hours_on_live_overrun),
+  }))
+}
+
+type CoverageByProject = {
+  project_id: number
+  project_name: string
+  source: string | null
+  tasks: number
+  estimated_tasks: number
+  hours: number
+  estimated_hours: number
+}
+type OverrunByProject = {
+  project_id: number
+  realized_overrun_tasks: number
+  live_overrun_tasks: number
+  gross_overrun_hours: number
+}
+
+export async function fetchProjectMetricsAllTime(projectIds: number[]): Promise<ProjectMetricRow[]> {
+  let covQ = supabase
+    .from('v_metric_coverage_by_project')
+    .select('project_id, project_name, source, tasks, estimated_tasks, hours, estimated_hours')
+  if (projectIds.length > 0) covQ = covQ.in('project_id', projectIds)
+
+  let ovrQ = supabase
+    .from('v_metric_overrun_by_project')
+    .select('project_id, realized_overrun_tasks, live_overrun_tasks, gross_overrun_hours')
+  if (projectIds.length > 0) ovrQ = ovrQ.in('project_id', projectIds)
+
+  const [cov, ovr, completed] = await Promise.all([covQ, ovrQ, fetchProjectCompletedMap()])
+  if (cov.error) throw cov.error
+  if (ovr.error) throw ovr.error
+
+  const overrun = new Map(
+    ((ovr.data ?? []) as OverrunByProject[]).map((o) => [o.project_id, o]),
+  )
+
+  const byProject = new Map<number, CoverageByProject>()
+  for (const r of (cov.data ?? []) as CoverageByProject[]) {
+    const acc = byProject.get(r.project_id)
+    if (acc) {
+      acc.tasks = Number(acc.tasks) + Number(r.tasks)
+      acc.estimated_tasks = Number(acc.estimated_tasks) + Number(r.estimated_tasks)
+      acc.hours = Number(acc.hours) + Number(r.hours)
+      acc.estimated_hours = Number(acc.estimated_hours) + Number(r.estimated_hours)
+    } else {
+      byProject.set(r.project_id, { ...r })
+    }
+  }
+
+  const rows: ProjectMetricRow[] = []
+  for (const [project_id, a] of byProject.entries()) {
+    const o = overrun.get(project_id)
+    const hours = Number(a.hours)
+    rows.push({
+      project_id,
+      project_name: a.project_name,
+      source: a.source,
+      hours,
+      tasks: Number(a.tasks),
+      estimated_tasks: Number(a.estimated_tasks),
+      coverage_pct: hours > 0 ? (Number(a.estimated_hours) / hours) * 100 : null,
+      overrun_tasks: Number(o?.realized_overrun_tasks ?? 0) + Number(o?.live_overrun_tasks ?? 0),
+      overrun_hours: Number(o?.gross_overrun_hours ?? 0),
+      is_completed: completed.get(project_id) ?? false,
+    })
+  }
+  return rows.sort((a, b) => b.hours - a.hours)
+}
+
+type ProjectMonth = {
+  project_id: number
+  project_name: string
+  source: string | null
+  project_is_completed: boolean
+  total_hours: number
+  tasks_touched: number
+  estimated_tasks: number
+  coverage_pct: number | null
+  realized_overrun_tasks_touched: number
+  hours_on_realized_overrun: number
+  live_overrun_tasks_touched: number
+  hours_on_live_overrun: number
+}
+
+export async function fetchProjectMetricsForMonth(
+  month: string,
+  projectIds: number[],
+): Promise<ProjectMetricRow[]> {
+  let q = supabase
+    .from('v_metric_project_month')
+    .select(
+      'project_id, project_name, source, project_is_completed, total_hours, tasks_touched, estimated_tasks, coverage_pct, realized_overrun_tasks_touched, hours_on_realized_overrun, live_overrun_tasks_touched, hours_on_live_overrun',
+    )
+    .eq('month', month)
+    .order('total_hours', { ascending: false })
+  if (projectIds.length > 0) q = q.in('project_id', projectIds)
+  const { data, error } = await q
+  if (error) throw error
+
+  return ((data ?? []) as ProjectMonth[]).map((r) => ({
+    project_id: r.project_id,
+    project_name: r.project_name,
+    source: r.source,
+    hours: Number(r.total_hours),
+    tasks: Number(r.tasks_touched),
+    estimated_tasks: Number(r.estimated_tasks),
+    coverage_pct: r.coverage_pct == null ? null : Number(r.coverage_pct),
+    overrun_tasks:
+      Number(r.realized_overrun_tasks_touched) + Number(r.live_overrun_tasks_touched),
+    overrun_hours: Number(r.hours_on_realized_overrun) + Number(r.hours_on_live_overrun),
+    is_completed: Boolean(r.project_is_completed),
+  }))
 }
 
 /* ── Dashboard overview (server-side aggregation; see v_dashboard_* views) ── */

@@ -1,21 +1,29 @@
 import { supabase } from './supabase'
-import { TEAM_ROLES, fetchProjectCompletedMap, fetchUserClassMap } from './queries'
-import type { ContributorStats, ProjectStats, TaskActualVsEstimate } from './queries'
+import type { ContributorStats, TaskActualVsEstimate } from './queries'
 
 /**
- * Period-scoped stats for the People grid, Projects grid, and project page.
+ * Period-scoped stats for the **project detail page only**.
  *
- * The pre-aggregated views (v_contributor_stats / v_project_stats) are
- * all-time. When the user sets a date range we recompute the same shapes
- * client-side: walk time_records within the range, join task lifetime
- * metadata from v_task_actual_vs_estimate, and aggregate per contributor /
- * per project. Semantics mirror the views exactly:
+ * DEPRECATED — this is the tail of the client-side re-aggregation pipeline
+ * the redesign deletes (plan §3 "Three period systems → one", §6.7). F2
+ * removed its People-grid and Projects-grid halves: those two now read the
+ * canonical `v_metric_*` views, one definition per metric, in SQL.
+ *
+ * What remains is `fetchProjectPeriodDetail`, which needs per-TASK hours
+ * inside a date range. No canonical view exposes that grain — the §5 family
+ * is all-time-per-task or aggregated-per-month, never task × period — so the
+ * project detail page keeps this path until a period-grain task view exists.
+ * Recorded as F2's open question in docs/progress-log.md; the deletion lands
+ * with the detail-page half.
+ *
+ * Semantics of what's left (unchanged, and NOT the canonical §5 ones):
  *
  * - hours are the hours logged WITHIN the period;
  * - a task is "overrun" by its LIFETIME actual vs estimate;
+ * - the population is `v_task_actual_vs_estimate` — whole company, no 2025
+ *   floor — not the 65-project dashboard scope;
  * - QA rates average over distinct labeled tasks only (NULL skipped);
- * - records whose task is missing from the view (trashed) are dropped,
- *   matching the views' is_trashed filters.
+ * - records whose task is missing from the view (trashed) are dropped.
  */
 
 export type PeriodScope = {
@@ -205,87 +213,6 @@ export function aggregateContributorStats(
   return rows.sort((a, b) => b.total_hours - a.total_hours)
 }
 
-export function aggregateProjectStats(
-  recs: PeriodTimeRecord[],
-  meta: Map<number, TaskActualVsEstimate>,
-  projectCompleted?: Map<number, boolean>,
-): ProjectStats[] {
-  type Acc = {
-    name: string
-    hours: number
-    perTaskHours: Map<number, number>
-    users: Set<number>
-    source: string | null
-    jira_key: string | null
-  }
-  const byProject = new Map<number, Acc>()
-  for (const r of recs) {
-    const m = meta.get(r.task_id)
-    if (!m) continue
-    let acc = byProject.get(m.project_id)
-    if (!acc) {
-      acc = { name: m.project_name, hours: 0, perTaskHours: new Map(), users: new Set(), source: m.source, jira_key: m.project_jira_key }
-      byProject.set(m.project_id, acc)
-    }
-    const h = Number(r.value_hours)
-    acc.hours += h
-    acc.perTaskHours.set(r.task_id, (acc.perTaskHours.get(r.task_id) ?? 0) + h)
-    acc.users.add(r.user_id)
-  }
-
-  const rows: ProjectStats[] = []
-  for (const [projectId, acc] of byProject.entries()) {
-    let unestimated = 0
-    let hoursOnUnestimated = 0
-    let overrun = 0
-    let hoursOnOverrun = 0
-    let bugsSum = 0
-    let bugsN = 0
-    let iterSum = 0
-    let iterN = 0
-
-    for (const [taskId, taskHours] of acc.perTaskHours.entries()) {
-      const m = meta.get(taskId)!
-      if (m.estimate_hours == null) {
-        unestimated++
-        hoursOnUnestimated += taskHours
-      }
-      if (isLifetimeOverrun(m)) {
-        overrun++
-        hoursOnOverrun += taskHours
-      }
-      if (m.qa_bugs != null) {
-        bugsSum += Number(m.qa_bugs)
-        bugsN++
-      }
-      if (m.qa_iterations != null) {
-        iterSum += Number(m.qa_iterations)
-        iterN++
-      }
-    }
-
-    rows.push({
-      project_id: projectId,
-      project_name: acc.name,
-      tasks_with_time: acc.perTaskHours.size,
-      unestimated_tasks: unestimated,
-      overrun_tasks: overrun,
-      total_hours: acc.hours,
-      hours_on_unestimated: hoursOnUnestimated,
-      hours_on_overrun: hoursOnOverrun,
-      team_members: acc.users.size,
-      source: acc.source,
-      jira_key: acc.jira_key,
-      avg_qa_bugs: avgOrNull(bugsSum, bugsN),
-      qa_bugs_tasks: bugsN,
-      avg_qa_iterations: avgOrNull(iterSum, iterN),
-      qa_iterations_tasks: iterN,
-      is_completed: projectCompleted?.get(projectId) ?? false,
-    })
-  }
-  return rows.sort((a, b) => b.total_hours - a.total_hours)
-}
-
 export function aggregateProjectContributorStats(
   recs: PeriodTimeRecord[],
   meta: Map<number, TaskActualVsEstimate>,
@@ -313,29 +240,6 @@ async function fetchMetaAndNames(recs: PeriodTimeRecord[]): Promise<{
   const taskIds = Array.from(new Set(recs.map((r) => r.task_id)))
   const [meta, names] = await Promise.all([fetchTaskMetaByIds(taskIds), fetchUserNameMap()])
   return { meta, names }
-}
-
-export async function fetchContributorStatsForPeriod(scope: PeriodScope): Promise<ContributorStats[]> {
-  const recs = await fetchPeriodTimeRecords(scope)
-  if (recs.length === 0) return []
-  const [{ meta, names }, projectCompleted, userClass] = await Promise.all([
-    fetchMetaAndNames(recs),
-    fetchProjectCompletedMap(),
-    fetchUserClassMap(),
-  ])
-  const rows = aggregateContributorStats(recs, meta, names, { projectCompleted, userClass })
-  // People grid: Owner/Member only, matching the all-time v_contributor_stats query.
-  return rows.filter((r) => r.class != null && TEAM_ROLES.includes(r.class))
-}
-
-export async function fetchProjectStatsForPeriod(scope: PeriodScope): Promise<ProjectStats[]> {
-  const recs = await fetchPeriodTimeRecords(scope)
-  if (recs.length === 0) return []
-  const [{ meta }, projectCompleted] = await Promise.all([
-    fetchMetaAndNames(recs),
-    fetchProjectCompletedMap(),
-  ])
-  return aggregateProjectStats(recs, meta, projectCompleted)
 }
 
 export type ProjectPeriodDetail = {

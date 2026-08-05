@@ -3,116 +3,117 @@ import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@/components/DataTable'
 import { PeriodSwitcher } from '@/components/PeriodSwitcher'
-import { QaRate } from '@/components/QaRate'
-import { fetchProjectStats, type ProjectStats } from '@/lib/queries'
-import { fetchProjectStatsForPeriod } from '@/lib/periodStats'
+import {
+  fetchProjectMetricsAllTime,
+  fetchProjectMetricsForMonth,
+  monthKey,
+  type ProjectMetricRow,
+} from '@/lib/queries'
+import { useFilters } from '@/lib/FilterContext'
 import { formatHours } from '@/lib/format'
-import { PERIOD_GROUPS, periodSearchParams, type PeriodPreset } from '@/lib/period'
-import { useListFilters } from '@/lib/useListFilters'
+import {
+  PERIOD_GROUPS,
+  parsePeriodSearch,
+  periodRange,
+  periodSearchParams,
+  type PeriodPreset,
+} from '@/lib/period'
 import { SourceBadge } from '@/components/SourceBadge'
 
-const columns: ColumnDef<ProjectStats>[] = [
-  {
-    accessorKey: 'project_name',
-    header: 'Project Name',
-    cell: ({ row }) => (
-      <div className="flex items-center gap-1.5">
-        <Link
-          to="/projects/$projectId"
-          params={{ projectId: String(row.original.project_id) }}
-          className="font-medium text-blue-600 hover:text-blue-800 hover:underline"
-        >
-          {row.original.project_name}
-        </Link>
-        <SourceBadge source={row.original.source} />
-      </div>
-    ),
-  },
-  {
-    accessorKey: 'total_hours',
-    header: 'Total hours',
-    cell: ({ getValue }) => formatHours(Number(getValue())),
-  },
-  { accessorKey: 'tasks_with_time', header: 'Tasks' },
-  {
-    id: 'estimated_tasks',
-    header: 'Estimated',
-    accessorFn: (r) => r.tasks_with_time - r.unestimated_tasks,
-    cell: ({ getValue }) => getValue() as number,
-  },
-  {
-    accessorKey: 'overrun_tasks',
-    header: 'Overrun',
-    cell: ({ getValue }) => {
-      const v = getValue() as number
-      return <span className={v > 0 ? 'text-red-600 font-medium' : ''}>{v}</span>
+/** Overrun changes basis with the period — see PeoplePage's note. */
+function makeColumns(periodActive: boolean): ColumnDef<ProjectMetricRow>[] {
+  return [
+    {
+      accessorKey: 'project_name',
+      header: 'Project Name',
+      cell: ({ row }) => (
+        <div className="flex items-center gap-1.5">
+          <Link
+            to="/projects/$projectId"
+            params={{ projectId: String(row.original.project_id) }}
+            className="font-medium text-blue-600 hover:text-blue-800 hover:underline"
+          >
+            {row.original.project_name}
+          </Link>
+          <SourceBadge source={row.original.source} />
+        </div>
+      ),
     },
-  },
-  {
-    accessorKey: 'hours_on_overrun',
-    header: 'Hours on overrun',
-    cell: ({ getValue }) => formatHours(Number(getValue())),
-  },
-  {
-    id: 'bugs_rate',
-    header: 'Bugs Rate',
-    accessorFn: (r) => r.avg_qa_bugs ?? -1,
-    cell: ({ row }) => (
-      <QaRate kind="bugs" value={row.original.avg_qa_bugs} sampleSize={row.original.qa_bugs_tasks} />
-    ),
-  },
-  {
-    id: 'return_rate',
-    header: 'Return Rate',
-    accessorFn: (r) => r.avg_qa_iterations ?? -1,
-    cell: ({ row }) => (
-      <QaRate
-        kind="iterations"
-        value={row.original.avg_qa_iterations}
-        sampleSize={row.original.qa_iterations_tasks}
-      />
-    ),
-  },
-  { accessorKey: 'team_members', header: 'Team Members' },
-]
+    {
+      accessorKey: 'hours',
+      header: 'Total hours',
+      cell: ({ getValue }) => formatHours(Number(getValue())),
+    },
+    { accessorKey: 'tasks', header: 'Tasks' },
+    { accessorKey: 'estimated_tasks', header: 'Estimated' },
+    {
+      accessorKey: 'coverage_pct',
+      header: 'Coverage',
+      cell: ({ getValue }) => {
+        const v = getValue() as number | null
+        if (v == null) return '—'
+        const cls = v >= 60 ? 'text-emerald-600' : v >= 30 ? 'text-amber-600' : 'text-red-600'
+        return <span className={`font-medium ${cls}`}>{Math.round(v)}%</span>
+      },
+    },
+    {
+      accessorKey: 'overrun_tasks',
+      header: periodActive ? 'Overrun tasks (touched)' : 'Overrun tasks',
+      cell: ({ getValue }) => {
+        const v = getValue() as number
+        return <span className={v > 0 ? 'text-red-600 font-medium' : ''}>{v}</span>
+      },
+    },
+    {
+      accessorKey: 'overrun_hours',
+      header: periodActive ? 'Hours on overrun' : 'Overrun hours',
+      cell: ({ getValue }) => formatHours(Number(getValue())),
+    },
+  ]
+}
 
 export function ProjectsPage() {
   const search = useSearch({ from: '/projects' })
   const navigate = useNavigate()
-  const { preset, filters } = useListFilters(search)
-  const [rows, setRows] = useState<ProjectStats[]>([])
+  const { filters } = useFilters()
+  const [rows, setRows] = useState<ProjectMetricRow[]>([])
   const [loading, setLoading] = useState(false)
   const [showCompleted, setShowCompleted] = useState(false)
 
-  function setPeriod(next: PeriodPreset, customFrom?: string, customTo?: string) {
-    navigate({
-      to: '/projects',
-      search: () => periodSearchParams(next, PERIOD_GROUPS.list, customFrom, customTo),
-    })
+  // Validated against the group, not read raw: this grid offers three presets,
+  // so a bookmark carrying `?period=custom` (or a pre-F2 `?period=6m`) has to
+  // fall back to the default rather than resolve to a month it never meant.
+  const preset: PeriodPreset =
+    parsePeriodSearch(search, PERIOD_GROUPS.grid) ?? PERIOD_GROUPS.grid.default
+  const isAllTime = preset === 'all_time'
+  const month = useMemo(
+    () => (isAllTime ? null : monthKey(periodRange(preset).from)),
+    [isAllTime, preset],
+  )
+
+  function setPeriod(next: PeriodPreset) {
+    navigate({ to: '/projects', search: () => periodSearchParams(next, PERIOD_GROUPS.grid) })
   }
 
-  // Default to active projects only; the toggle reveals completed ones. Works
-  // in both all-time (is_completed from v_project_stats) and period mode
-  // (is_completed set from the projects map in periodStats).
+  // Default to active projects only; the toggle reveals completed ones.
   const visibleRows = useMemo(
     () => (showCompleted ? rows : rows.filter((r) => !r.is_completed)),
     [rows, showCompleted],
   )
   const completedCount = useMemo(() => rows.filter((r) => r.is_completed).length, [rows])
 
-  // This page filters by projects + date range only; filters.userIds is
-  // deliberately ignored (the Users select is hidden here).
-  const { from, to, projectIds } = filters
+  // This page filters by projects only; filters.userIds is deliberately
+  // ignored (the Users select is hidden here).
+  const { projectIds } = filters
 
   useEffect(() => {
     let cancelled = false
     async function load() {
       setLoading(true)
-      const hasPeriod = Boolean(from || to)
       try {
-        const data = await (hasPeriod
-          ? fetchProjectStatsForPeriod({ from, to, projectIds })
-          : fetchProjectStats(projectIds))
+        const data = await (month
+          ? fetchProjectMetricsForMonth(month, projectIds)
+          : fetchProjectMetricsAllTime(projectIds))
         if (!cancelled) setRows(data)
       } catch {
         if (!cancelled) setRows([])
@@ -124,23 +125,23 @@ export function ProjectsPage() {
     return () => {
       cancelled = true
     }
-  }, [from, to, projectIds])
+  }, [month, projectIds])
+
+  const columns = useMemo(() => makeColumns(!isAllTime), [isAllTime])
 
   return (
     <div className="space-y-3">
-      <PeriodSwitcher
-        preset={preset}
-        group={PERIOD_GROUPS.list}
-        customFrom={search.from}
-        customTo={search.to}
-        onChange={setPeriod}
-      />
+      <PeriodSwitcher preset={preset} group={PERIOD_GROUPS.grid} onChange={setPeriod} />
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-sm font-semibold text-neutral-900">Projects (by time tracking)</h2>
           <p className="text-xs text-neutral-500">
-            Totals per project over tasks with logged time. Bugs Rate / Return Rate are averages of the QA
-            labels across the project's labeled tasks — the (n) is how many tasks carry the label.
+            The 65 client-delivery projects, tasks created since 2025-01-01 — the dashboard's own
+            scope, not the whole company. Coverage is the share of the project's hours on estimated
+            tasks.{' '}
+            {isAllTime
+              ? 'Overrun is gross: realized plus live, never netted against underrun, with container “bucket” tasks excluded.'
+              : 'In a single month, overrun counts tasks touched that month which overran, and the hours logged on them.'}
           </p>
         </div>
         <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-neutral-600">
