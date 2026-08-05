@@ -665,11 +665,6 @@ type MetricGridRow = {
   overrun_hours: number
 }
 
-export type PersonMetricRow = MetricGridRow & {
-  user_id: number
-  display_name: string
-}
-
 export type ProjectMetricRow = MetricGridRow & {
   project_id: number
   project_name: string
@@ -677,151 +672,9 @@ export type ProjectMetricRow = MetricGridRow & {
   is_completed: boolean
 }
 
-/**
- * FilterBar user ids → canonical (R6-merged) ids.
- *
- * The canonical views key on the merged person, so a raw alias id — 16 of the
- * 334 accounts — matches nothing. Selecting "Vladyslav Zdrachuk" (255) has to
- * find the person's rows under 3579. Identity-mapped for everyone else, so
- * this is a no-op for the other 318.
- */
-export async function resolveCanonicalUserIds(userIds: number[]): Promise<number[]> {
-  if (userIds.length === 0) return []
-  const { data, error } = await supabase
-    .from('v_person_alias')
-    .select('user_id, canonical_user_id')
-    .in('user_id', userIds)
-  if (error) throw error
-  const rows = (data ?? []) as { user_id: number; canonical_user_id: number }[]
-  const byRaw = new Map(rows.map((r) => [r.user_id, r.canonical_user_id]))
-  return Array.from(new Set(userIds.map((id) => byRaw.get(id) ?? id)))
-}
-
 /** `2026-08-01` for the calendar month a period's start date falls in. */
 export function monthKey(from: string): string {
   return `${from.slice(0, 7)}-01`
-}
-
-type CoverageByPerson = {
-  user_id: number
-  display_name: string
-  tasks: number
-  estimated_tasks: number
-  hours: number
-  estimated_hours: number
-}
-type OverrunByPerson = {
-  user_id: number
-  realized_overrun_tasks: number
-  realized_overrun_hours: number
-  live_overrun_tasks: number
-  live_overrun_hours: number
-}
-
-/**
- * Coverage is grained per (person, is_estimating_segment), so a person who
- * works across both segment classes has two rows. Roll them up before
- * anything else reads a count.
- */
-export async function fetchPersonMetricsAllTime(userIds: number[]): Promise<PersonMetricRow[]> {
-  const canonicalIds = await resolveCanonicalUserIds(userIds)
-
-  let covQ = supabase
-    .from('v_metric_coverage_by_person')
-    .select('user_id, display_name, tasks, estimated_tasks, hours, estimated_hours')
-  if (canonicalIds.length > 0) covQ = covQ.in('user_id', canonicalIds)
-
-  let ovrQ = supabase
-    .from('v_metric_overrun_by_person')
-    .select('user_id, realized_overrun_tasks, realized_overrun_hours, live_overrun_tasks, live_overrun_hours')
-  if (canonicalIds.length > 0) ovrQ = ovrQ.in('user_id', canonicalIds)
-
-  const [cov, ovr] = await Promise.all([covQ, ovrQ])
-  if (cov.error) throw cov.error
-  if (ovr.error) throw ovr.error
-
-  const overrun = new Map(
-    ((ovr.data ?? []) as OverrunByPerson[]).map((o) => [o.user_id, o]),
-  )
-
-  const byPerson = new Map<number, { display_name: string; tasks: number; estimated_tasks: number; hours: number; estimated_hours: number }>()
-  for (const r of (cov.data ?? []) as CoverageByPerson[]) {
-    const acc = byPerson.get(r.user_id)
-    if (acc) {
-      acc.tasks += Number(r.tasks)
-      acc.estimated_tasks += Number(r.estimated_tasks)
-      acc.hours += Number(r.hours)
-      acc.estimated_hours += Number(r.estimated_hours)
-    } else {
-      byPerson.set(r.user_id, {
-        display_name: r.display_name,
-        tasks: Number(r.tasks),
-        estimated_tasks: Number(r.estimated_tasks),
-        hours: Number(r.hours),
-        estimated_hours: Number(r.estimated_hours),
-      })
-    }
-  }
-
-  const rows: PersonMetricRow[] = []
-  for (const [user_id, a] of byPerson.entries()) {
-    const o = overrun.get(user_id)
-    rows.push({
-      user_id,
-      display_name: a.display_name,
-      hours: a.hours,
-      tasks: a.tasks,
-      estimated_tasks: a.estimated_tasks,
-      coverage_pct: a.hours > 0 ? (a.estimated_hours / a.hours) * 100 : null,
-      // §5 gross overrun — realized + live, never netted. The two are
-      // disjoint (a task is completed or it is open), so this is a count.
-      overrun_tasks: Number(o?.realized_overrun_tasks ?? 0) + Number(o?.live_overrun_tasks ?? 0),
-      overrun_hours: Number(o?.realized_overrun_hours ?? 0) + Number(o?.live_overrun_hours ?? 0),
-    })
-  }
-  return rows.sort((a, b) => b.hours - a.hours)
-}
-
-type PersonMonth = {
-  user_id: number
-  display_name: string
-  total_hours: number
-  tasks_touched: number
-  estimated_tasks: number
-  coverage_pct: number | null
-  realized_overrun_tasks_touched: number
-  hours_on_realized_overrun: number
-  live_overrun_tasks_touched: number
-  hours_on_live_overrun: number
-}
-
-export async function fetchPersonMetricsForMonth(
-  month: string,
-  userIds: number[],
-): Promise<PersonMetricRow[]> {
-  const canonicalIds = await resolveCanonicalUserIds(userIds)
-  let q = supabase
-    .from('v_metric_person_month')
-    .select(
-      'user_id, display_name, total_hours, tasks_touched, estimated_tasks, coverage_pct, realized_overrun_tasks_touched, hours_on_realized_overrun, live_overrun_tasks_touched, hours_on_live_overrun',
-    )
-    .eq('month', month)
-    .order('total_hours', { ascending: false })
-  if (canonicalIds.length > 0) q = q.in('user_id', canonicalIds)
-  const { data, error } = await q
-  if (error) throw error
-
-  return ((data ?? []) as PersonMonth[]).map((r) => ({
-    user_id: r.user_id,
-    display_name: r.display_name,
-    hours: Number(r.total_hours),
-    tasks: Number(r.tasks_touched),
-    estimated_tasks: Number(r.estimated_tasks),
-    coverage_pct: r.coverage_pct == null ? null : Number(r.coverage_pct),
-    overrun_tasks:
-      Number(r.realized_overrun_tasks_touched) + Number(r.live_overrun_tasks_touched),
-    overrun_hours: Number(r.hours_on_realized_overrun) + Number(r.hours_on_live_overrun),
-  }))
 }
 
 type CoverageByProject = {
@@ -1940,4 +1793,367 @@ export async function fetchMetricConfig(): Promise<MetricConfig> {
     // it, and a literal here would drift away from `meets_sample_floor`.
     person_min_sample: Number(row?.person_min_sample ?? 10),
   }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// §4.5 People — the coaching-card sources (F5)
+//
+// Every predicate arrives from a `v_metric_*` view: `meets_sample_floor`,
+// `exact_match_flagged`, every ratio and every percentage. Nothing on this
+// page is re-derived in the browser (§2.3).
+//
+// **Load shape.** Each query below was timed against prod as role
+// `authenticated` under its real 8s cap before being written, because that is
+// the only way this hazard shows up (F2/BUG A: `COUNT(*)` as `postgres`
+// returns in 0.36s on a view that takes 42s to project). Measured 2026-08-05:
+//
+//   v_person roster ...................... 0.21s
+//   v_metric_coverage_by_person .......... 0.36s
+//   v_metric_overrun_by_person ........... 0.32s
+//   v_metric_calibration_by_person ....... 4.52s cold / 0.41s warm
+//   v_metric_person_month, full series ... 0.37s
+//   v_metric_utilization_by_person_month . 0.43s
+//   v_metric_tasks, one person's sample .. 1.6s (n=28) / 3.3s (n=62, worst)
+//   v_metric_tasks, WHOLE sample ......... TIMES OUT at 8s — see below
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * The §4.5 roster: "active loggers only … clients and terminated staff
+ * excluded (offboarded people keep historical contributions on project pages,
+ * not rows here)".
+ *
+ * `is_active_roster` is PeopleForce `employed`/`probation` — the same
+ * predicate `v_employee_day` uses for capacity, so this page and the
+ * utilization denominator can never disagree about who is staff. Measured
+ * before shipping: all 25 people it excludes are `pf_status = 'terminated'`
+ * bar one unresolved Jira synthetic, and every one of the 32 people who logged
+ * in-scope time in the last 30 days is on it. So it drops leavers, not
+ * colleagues — and it drops no hours, only rows: 26,253.2h shown +
+ * 9,335.0h hidden = 35,588.2h, exactly F2's verified People total.
+ */
+export type RosterPerson = {
+  user_id: number
+  display_name: string
+  department_name: string | null
+  position_name: string | null
+  peopleforce_id: number | null
+  merged_identities: number
+}
+
+export async function fetchActiveRoster(): Promise<RosterPerson[]> {
+  const { data, error } = await supabase
+    .from('v_person')
+    .select('user_id, display_name, department_name, position_name, peopleforce_id, merged_identities')
+    .eq('is_active_roster', true)
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    user_id: Number(r.user_id),
+    display_name: String(r.display_name ?? ''),
+    department_name: (r.department_name as string | null) ?? null,
+    position_name: (r.position_name as string | null) ?? null,
+    peopleforce_id: r.peopleforce_id == null ? null : Number(r.peopleforce_id),
+    merged_identities: Number(r.merged_identities ?? 0),
+  }))
+}
+
+/**
+ * §5 Calibration at person grain, under the ≥40% attribution rule (never
+ * assignee-of-record — §1.5.4).
+ *
+ * `meets_sample_floor` and `exact_match_flagged` are carried separately rather
+ * than collapsed here, because they disagree on a real person: Ivan Kotsan is
+ * `exact_match_flagged = true` on **n = 2**. `trustFlag()` in
+ * `lib/peopleCoaching.ts` is the single place the conjunction is applied.
+ */
+export type PersonCalibration = {
+  user_id: number
+  n: number
+  median_ratio: number | null
+  mean_ratio: number | null
+  p90_ratio: number | null
+  in_band_pct: number | null
+  exact_match_pct: number | null
+  exact_match_flagged: boolean
+  meets_sample_floor: boolean
+  avg_entries_per_task: number | null
+  avg_distinct_dates_per_task: number | null
+}
+
+export async function fetchCalibrationByPerson(): Promise<PersonCalibration[]> {
+  const { data, error } = await supabase
+    .from('v_metric_calibration_by_person')
+    .select('user_id, n, median_ratio, mean_ratio, p90_ratio, in_band_pct, exact_match_pct, exact_match_flagged, meets_sample_floor, avg_entries_per_task, avg_distinct_dates_per_task')
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    user_id: Number(r.user_id),
+    n: Number(r.n ?? 0),
+    median_ratio: r.median_ratio == null ? null : Number(r.median_ratio),
+    mean_ratio: r.mean_ratio == null ? null : Number(r.mean_ratio),
+    p90_ratio: r.p90_ratio == null ? null : Number(r.p90_ratio),
+    in_band_pct: r.in_band_pct == null ? null : Number(r.in_band_pct),
+    exact_match_pct: r.exact_match_pct == null ? null : Number(r.exact_match_pct),
+    exact_match_flagged: Boolean(r.exact_match_flagged),
+    meets_sample_floor: Boolean(r.meets_sample_floor),
+    avg_entries_per_task: r.avg_entries_per_task == null ? null : Number(r.avg_entries_per_task),
+    avg_distinct_dates_per_task:
+      r.avg_distinct_dates_per_task == null ? null : Number(r.avg_distinct_dates_per_task),
+  }))
+}
+
+/**
+ * §5 coverage at person grain, kept **split** by `is_estimating_segment`.
+ *
+ * §4.5 defines the card's coverage as "% of their hours on estimated tasks
+ * **within estimating projects**", so the two segment classes must stay
+ * separable. Rolling them up first — which the F2 grid does, correctly, for a
+ * different question — would put T&M hours that carry no estimates by design
+ * into the denominator and manufacture a coverage problem that is really a
+ * business-model difference (§2.2, "segment or lie").
+ */
+export type PersonCoverageSplit = {
+  user_id: number
+  display_name: string
+  is_estimating_segment: boolean
+  tasks: number
+  estimated_tasks: number
+  hours: number
+  estimated_hours: number
+  unestimated_hours: number
+}
+
+export async function fetchCoverageByPersonSplit(): Promise<PersonCoverageSplit[]> {
+  const { data, error } = await supabase
+    .from('v_metric_coverage_by_person')
+    .select('user_id, display_name, is_estimating_segment, tasks, estimated_tasks, hours, estimated_hours, unestimated_hours')
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    user_id: Number(r.user_id),
+    display_name: String(r.display_name ?? ''),
+    is_estimating_segment: Boolean(r.is_estimating_segment),
+    tasks: Number(r.tasks ?? 0),
+    estimated_tasks: Number(r.estimated_tasks ?? 0),
+    hours: Number(r.hours ?? 0),
+    estimated_hours: Number(r.estimated_hours ?? 0),
+    unestimated_hours: Number(r.unestimated_hours ?? 0),
+  }))
+}
+
+/** Monthly hours + coverage per person (R8) — the card's own trend. */
+export type PersonMonthPoint = {
+  user_id: number
+  month: string
+  total_hours: number
+  coverage_pct: number | null
+  projects_touched: number
+}
+
+export async function fetchPersonMonthSeries(sinceMonth: string): Promise<PersonMonthPoint[]> {
+  const rows = await fetchAllPages<Record<string, unknown>>((from, to) =>
+    supabase
+      .from('v_metric_person_month')
+      .select('user_id, month, total_hours, coverage_pct, projects_touched')
+      .gte('month', sinceMonth)
+      .order('month', { ascending: true })
+      .range(from, to),
+  )
+  return rows.map((r) => ({
+    user_id: Number(r.user_id),
+    month: String(r.month),
+    total_hours: Number(r.total_hours ?? 0),
+    coverage_pct: r.coverage_pct == null ? null : Number(r.coverage_pct),
+    projects_touched: Number(r.projects_touched ?? 0),
+  }))
+}
+
+/**
+ * §5 Utilization off the R4-repaired `v_employee_day`.
+ *
+ * Always read for a **complete** calendar month. The current month is always
+ * partial — 2026-08 showed 1,704h expected against July's 12,586h and 57
+ * "zero loggers" — and rendering that as a utilization collapse would be the
+ * capacity equivalent of F3's "0 signals means healthy" bug.
+ */
+export type PersonUtilization = {
+  user_id: number
+  month: string
+  expected_hours: number
+  tracked_hours: number
+  utilization_pct: number | null
+  leave_days: number
+  is_zero_logger: boolean
+}
+
+export async function fetchPersonUtilization(month: string): Promise<PersonUtilization[]> {
+  const { data, error } = await supabase
+    .from('v_metric_utilization_by_person_month')
+    .select('user_id, month, expected_hours, tracked_hours, utilization_pct, leave_days, is_zero_logger')
+    .eq('month', month)
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    user_id: Number(r.user_id),
+    month: String(r.month),
+    expected_hours: Number(r.expected_hours ?? 0),
+    tracked_hours: Number(r.tracked_hours ?? 0),
+    utilization_pct: r.utilization_pct == null ? null : Number(r.utilization_pct),
+    leave_days: Number(r.leave_days ?? 0),
+    is_zero_logger: Boolean(r.is_zero_logger),
+  }))
+}
+
+/**
+ * One person's §5 calibration sample, for the quarterly history (§4.5 person
+ * detail: "personal calibration history (quarterly)").
+ *
+ * **Why this is per-person and not page-wide.** S4/R8 deliberately left
+ * ratio / in-band / exact-match out of `v_metric_person_month`, because
+ * month-slicing the *contribution* grain would charge a task-lifetime ratio to
+ * whichever month its hours happened to fall in. The correct grain keys on the
+ * task's `completed_on`, and no such view exists yet — the progress log has
+ * carried it as an open question since S4.
+ *
+ * Fetching the whole sample and bucketing it client-side was the obvious
+ * substitute, and it **does not work**: measured as role `authenticated`,
+ * `WHERE is_calibration_sample AND attributed_user_id IS NOT NULL` exceeds the
+ * 8s cap at 4 projected columns *and still exceeds it at 2*, so this is filter
+ * selectivity rather than the projection width F4's revert inferred. The
+ * selective `attributed_user_id = $1` form returns in 1.6s (n=28) to 3.3s
+ * (n=62, the largest sample any one person has). So the quarterly history is
+ * affordable one person at a time, and only there.
+ *
+ * Only the *bucketing* happens in the browser — `is_calibration_sample`,
+ * `ratio` and `is_exact_match` all come from `v_metric_tasks`, exactly as F4's
+ * calibration cuts do (§2.3).
+ */
+export type PersonCalibrationTask = {
+  task_id: number
+  task_name: string
+  project_id: number
+  project_name: string
+  completed_on: string | null
+  estimate_hours: number
+  actual_hours: number
+  ratio: number
+  is_in_band: boolean
+  is_exact_match: boolean
+}
+
+export async function fetchPersonCalibrationSample(
+  userId: number,
+): Promise<PersonCalibrationTask[]> {
+  const { data, error } = await supabase
+    .from('v_metric_tasks')
+    .select('task_id, task_name, project_id, project_name, completed_on, estimate_hours, actual_hours, ratio, is_in_band, is_exact_match')
+    .eq('is_calibration_sample', true)
+    .eq('attributed_user_id', userId)
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    task_id: Number(r.task_id),
+    task_name: String(r.task_name ?? ''),
+    project_id: Number(r.project_id),
+    project_name: String(r.project_name ?? ''),
+    completed_on: (r.completed_on as string | null) ?? null,
+    estimate_hours: Number(r.estimate_hours ?? 0),
+    actual_hours: Number(r.actual_hours ?? 0),
+    ratio: Number(r.ratio ?? 0),
+    is_in_band: Boolean(r.is_in_band),
+    is_exact_match: Boolean(r.is_exact_match),
+  }))
+}
+
+/**
+ * §4.5 person detail: "their current blowouts and stuck tasks, their
+ * unestimated worklist".
+ *
+ * Restricted to the tasks §5 *attributes* to this person, so the list cannot
+ * disagree with the calibration figures above it about what they own. A task
+ * where they logged 10% of the hours belongs on the project page, not in a
+ * conversation about their estimating.
+ *
+ * All three of §4.5's lists come from **one** query — every open task
+ * attributed to them — and are split in the component. Three separate fetches
+ * would pay `v_metric_tasks`' CTE cost three times for the same rows, and the
+ * selective `attributed_user_id = $1` filter is the only reason any of this is
+ * affordable inside the 8s cap (see the note on the calibration sample above).
+ */
+export type PersonOpenTask = {
+  task_id: number
+  task_name: string
+  project_id: number
+  project_name: string
+  source: string | null
+  task_jira_key: string | null
+  estimate_hours: number | null
+  actual_hours: number
+  overrun_hours: number
+  consumption: number | null
+  last_time_on: string | null
+  days_since_time: number | null
+  is_estimated: boolean
+  is_live_overrun: boolean
+  is_approaching: boolean
+  is_stuck: boolean
+}
+
+export async function fetchPersonOpenWork(userId: number): Promise<PersonOpenTask[]> {
+  const { data, error } = await supabase
+    .from('v_metric_tasks')
+    .select('task_id, task_name, project_id, project_name, source, task_jira_key, estimate_hours, actual_hours, overrun_live_hours, consumption, last_time_on, days_since_time, is_estimated, is_live_overrun, is_approaching, is_stuck')
+    .eq('attributed_user_id', userId)
+    .eq('is_completed', false)
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    task_id: Number(r.task_id),
+    task_name: String(r.task_name ?? ''),
+    project_id: Number(r.project_id),
+    project_name: String(r.project_name ?? ''),
+    source: (r.source as string | null) ?? null,
+    task_jira_key: (r.task_jira_key as string | null) ?? null,
+    estimate_hours: r.estimate_hours == null ? null : Number(r.estimate_hours),
+    actual_hours: Number(r.actual_hours ?? 0),
+    overrun_hours: Number(r.overrun_live_hours ?? 0),
+    consumption: r.consumption == null ? null : Number(r.consumption),
+    last_time_on: (r.last_time_on as string | null) ?? null,
+    days_since_time: r.days_since_time == null ? null : Number(r.days_since_time),
+    is_estimated: Boolean(r.is_estimated),
+    is_live_overrun: Boolean(r.is_live_overrun),
+    is_approaching: Boolean(r.is_approaching),
+    is_stuck: Boolean(r.is_stuck),
+  }))
+}
+
+/**
+ * §4.5 logging hygiene: "tracking-deficit history mined from the existing
+ * `reminder_deliveries` table … free longitudinal data, zero new sync work".
+ *
+ * Rows exist only where the Slack reminder system actually ran — today 35
+ * people over 2026-05-01 → 2026-07-20. A person with **no** rows has no
+ * history, which is not the same as a clean one, and the UI says so rather
+ * than rendering an encouraging zero.
+ */
+export type TrackingDeficit = {
+  period_start: string
+  period_end: string
+  kind: string
+  expected_hours: number
+  tracked_hours: number
+  deficit_hours: number
+  status: string
+}
+
+export async function fetchTrackingDeficits(userId: number): Promise<TrackingDeficit[]> {
+  const { data, error } = await supabase
+    .from('reminder_deliveries')
+    .select('period_start, period_end, kind, expected_hours, tracked_hours, deficit_hours, status')
+    .eq('user_id', userId)
+    .order('period_start', { ascending: true })
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    period_start: String(r.period_start),
+    period_end: String(r.period_end),
+    kind: String(r.kind ?? ''),
+    expected_hours: Number(r.expected_hours ?? 0),
+    tracked_hours: Number(r.tracked_hours ?? 0),
+    deficit_hours: Number(r.deficit_hours ?? 0),
+    status: String(r.status ?? ''),
+  }))
 }

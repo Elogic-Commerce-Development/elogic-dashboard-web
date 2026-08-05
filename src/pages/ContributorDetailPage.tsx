@@ -7,12 +7,26 @@ import { PersonQualityCards } from '@/components/PersonQualityCards'
 import { UnlinkedEmployeeBanner } from '@/components/UnlinkedEmployeeBanner'
 import { UtilizationDonut } from '@/components/UtilizationDonut'
 import { UtilizationSummaryCards } from '@/components/UtilizationSummaryCards'
+import { PersonCalibrationDetail } from '@/components/people/PersonCalibrationDetail'
+import { PersonOpenWork } from '@/components/people/PersonOpenWork'
+import { TrackingDeficits } from '@/components/people/TrackingDeficits'
+import { LoadFailure } from '@/components/estimation/Section'
+import { describeError } from '@/lib/errors'
 import {
+  fetchCalibrationByPerson,
   fetchContributorTaskSummary,
   fetchEmployeeDays,
+  fetchMetricConfig,
+  fetchPersonCalibrationSample,
+  fetchPersonOpenWork,
+  fetchTrackingDeficits,
   fetchUserDetail,
   type ContributorTaskSummary,
   type EmployeeDay,
+  type PersonCalibration,
+  type PersonCalibrationTask,
+  type PersonOpenTask,
+  type TrackingDeficit,
   type UserDetail,
 } from '@/lib/queries'
 import { formatHours, formatRatio, externalTaskLink, peopleForceEmployeeUrl } from '@/lib/format'
@@ -171,6 +185,54 @@ export function ContributorDetailPage() {
     return () => { cancelled = true }
   }, [uid, range.from, range.to])
 
+  // ── §4.5 coaching sections ────────────────────────────────────────────────
+  // Period-independent on purpose: calibration is the all-time §5 sample
+  // (§1.3 — quarterly at best, never monthly), and "open work" is a statement
+  // about right now. Only the utilization donut and the task table below
+  // follow the period switcher, which is why these load in their own effect.
+  const [coaching, setCoaching] = useState<{
+    calibration: PersonCalibration[]
+    sample: PersonCalibrationTask[]
+    openWork: PersonOpenTask[]
+    deficits: TrackingDeficit[]
+    floor: number
+  }>({ calibration: [], sample: [], openWork: [], deficits: [], floor: 10 })
+  const [coachingError, setCoachingError] = useState<string | undefined>()
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setCoachingError(undefined)
+      try {
+        const [calibration, sample, openWork, deficits, config] = await Promise.all([
+          fetchCalibrationByPerson(),
+          fetchPersonCalibrationSample(uid),
+          fetchPersonOpenWork(uid),
+          fetchTrackingDeficits(uid),
+          fetchMetricConfig(),
+        ])
+        if (!cancelled) {
+          setCoaching({
+            calibration,
+            sample,
+            openWork,
+            deficits,
+            floor: config.person_min_sample,
+          })
+        }
+      } catch (e) {
+        if (!cancelled) setCoachingError(describeError(e))
+      }
+    }
+    void load()
+    return () => { cancelled = true }
+  }, [uid])
+
+  const myCalibration = useMemo(
+    () => coaching.calibration.find((c) => c.user_id === uid),
+    [coaching.calibration, uid],
+  )
+
   const summary = useMemo(() => summarizeUtilization(days, range.from, range.to), [days, range.from, range.to])
   const isLinked = (user?.peopleforce_id ?? null) !== null
   const name = user?.display_name ?? tasks[0]?.contributor_name ?? `User #${uid}`
@@ -222,6 +284,24 @@ export function ContributorDetailPage() {
           {loadingDays && (
             <div className="text-xs text-neutral-400">Refreshing utilization…</div>
           )}
+        </>
+      )}
+
+      {/* §4.5's coaching card, expanded. Above the period-scoped sections
+          because it is what a 1:1 is actually prepared from. */}
+      {coachingError ? (
+        <LoadFailure what="The coaching sections" error={coachingError} />
+      ) : (
+        <>
+          <PersonCalibrationDetail
+            calibration={myCalibration}
+            allCalibration={coaching.calibration}
+            sample={coaching.sample}
+            userId={uid}
+            floor={coaching.floor}
+          />
+          <PersonOpenWork tasks={coaching.openWork} />
+          <TrackingDeficits rows={coaching.deficits} />
         </>
       )}
 

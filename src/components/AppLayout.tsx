@@ -34,17 +34,26 @@ export function AppLayout() {
   const isRadar = pathname === '/' || pathname === '/radar'
   const isDashboard = pathname === '/dashboard'
   const isEstimation = pathname === '/estimation'
-  // /people, /projects, and the deep /tasks/<id> page are all scoped to a
-  // single entity, so the global project + user multi-select adds no value
-  // there. The list pages keep the FilterBar.
+  // F5: /people declares its own population — §4.5's active roster, grouped by
+  // department — the way Radar and Estimation declare theirs. A user
+  // multi-select over a page of coaching cards would let someone quietly
+  // narrow the roster to one colleague, which is the opposite of what a
+  // no-ranking page is for, so it goes.
+  const isPeopleList = pathname === '/people'
+  // /people/<id>, /projects/<id> and /tasks/<id> are all scoped to a single
+  // entity, so the global project + user multi-select adds no value there.
   const isContributorDetail = /^\/people\/[^/]+/.test(pathname)
   const isProjectDetail = /^\/projects\/[^/]+/.test(pathname)
   const isTaskDetail = /^\/tasks\/[^/]+/.test(pathname)
   const hideFilterBar =
-    isRadar || isDashboard || isEstimation || isContributorDetail || isProjectDetail || isTaskDetail
-  // The list grids each get only their own entity filter:
-  // /people filters by people, /projects by projects.
-  const isPeopleList = pathname === '/people'
+    isRadar ||
+    isDashboard ||
+    isEstimation ||
+    isPeopleList ||
+    isContributorDetail ||
+    isProjectDetail ||
+    isTaskDetail
+  // /projects is the one list grid still taking an entity filter.
   const isProjectsList = pathname === '/projects'
 
   return (
@@ -95,12 +104,7 @@ export function AppLayout() {
         <main className="mx-auto max-w-7xl space-y-5 px-6 py-6">
           <TrackingSinceBanner />
           {!hideFilterBar && (
-            <FilterBar
-              value={filters}
-              onChange={setFilters}
-              hideProjects={isPeopleList}
-              hideUsers={isProjectsList}
-            />
+            <FilterBar value={filters} onChange={setFilters} hideUsers={isProjectsList} />
           )}
           <Outlet />
         </main>
