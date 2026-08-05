@@ -109,11 +109,14 @@ export function AttentionQueue({
   rows,
   series,
   loading,
+  error,
   untaggedActiveProjects,
 }: {
   rows: RadarQueueRow[]
   series: Map<number, ProjectMonthHours[]>
   loading: boolean
+  /** Set when the queue query failed — must never read as "nothing to triage". */
+  error?: string
   untaggedActiveProjects: number
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -131,7 +134,7 @@ export function AttentionQueue({
           </p>
         </div>
         <span className="text-xs tabular-nums text-neutral-500">
-          {rows.length} {rows.length === 1 ? 'project' : 'projects'}
+          {error ? '—' : `${rows.length} ${rows.length === 1 ? 'project' : 'projects'}`}
         </span>
       </header>
 
@@ -148,6 +151,14 @@ export function AttentionQueue({
 
       {loading ? (
         <p className="px-4 py-6 text-sm text-neutral-500">Loading…</p>
+      ) : error ? (
+        // Silence here would be indistinguishable from "all clear" on a page
+        // whose entire job is to warn. A failed queue says so, loudly.
+        <p className="px-4 py-6 text-sm text-red-700">
+          <span className="font-medium">The attention queue could not be loaded.</span> This is not
+          an all-clear — no signal was evaluated. Reload; if it persists, the error was:{' '}
+          <code className="text-xs">{error}</code>
+        </p>
       ) : rows.length === 0 ? (
         <p className="px-4 py-6 text-sm text-neutral-500">
           No project is firing a signal. That is the healthy state — nothing to triage today.
