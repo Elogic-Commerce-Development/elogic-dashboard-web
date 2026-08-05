@@ -10,7 +10,7 @@ import { UtilizationSummaryCards } from '@/components/UtilizationSummaryCards'
 import { PersonCalibrationDetail } from '@/components/people/PersonCalibrationDetail'
 import { PersonOpenWork } from '@/components/people/PersonOpenWork'
 import { TrackingDeficits } from '@/components/people/TrackingDeficits'
-import { LoadFailure } from '@/components/estimation/Section'
+import { LoadFailure, Loading } from '@/components/estimation/Section'
 import { describeError } from '@/lib/errors'
 import {
   fetchCalibrationByPerson,
@@ -198,11 +198,20 @@ export function ContributorDetailPage() {
     floor: number
   }>({ calibration: [], sample: [], openWork: [], deficits: [], floor: 10 })
   const [coachingError, setCoachingError] = useState<string | undefined>()
+  // These sections take 2–5s (the per-person calibration sample is the slow
+  // one), and every one of them has an empty state that reads as a *finding*
+  // about a person: "no completed estimated task is attributed to this
+  // person", "0 open", "no reminder history". Rendering those before the data
+  // lands states something untrue about a colleague on the page managers use
+  // to evaluate them — F3's "a failed load must never read as nothing to
+  // triage", with a person on the other end of it.
+  const [coachingLoading, setCoachingLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
     async function load() {
       setCoachingError(undefined)
+      setCoachingLoading(true)
       try {
         const [calibration, sample, openWork, deficits, config] = await Promise.all([
           fetchCalibrationByPerson(),
@@ -222,6 +231,8 @@ export function ContributorDetailPage() {
         }
       } catch (e) {
         if (!cancelled) setCoachingError(describeError(e))
+      } finally {
+        if (!cancelled) setCoachingLoading(false)
       }
     }
     void load()
@@ -291,6 +302,8 @@ export function ContributorDetailPage() {
           because it is what a 1:1 is actually prepared from. */}
       {coachingError ? (
         <LoadFailure what="The coaching sections" error={coachingError} />
+      ) : coachingLoading ? (
+        <Loading what="calibration, open work and logging hygiene" />
       ) : (
         <>
           <PersonCalibrationDetail
