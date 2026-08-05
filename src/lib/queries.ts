@@ -510,14 +510,120 @@ export async function fetchEmployeeDays(
   return (data ?? []) as EmployeeDay[]
 }
 
-export async function fetchTaskContributors(taskId: number): Promise<TaskContributor[]> {
-  const { data, error } = await supabase
-    .from('v_task_contributors')
+/**
+ * One task's economics, canonical-first.
+ *
+ * `v_metric_tasks` is the §5 task grain — same predicates as every other page,
+ * so a ratio here and a ratio on Radar cannot disagree. But it is *scoped*:
+ * 4,489 in-scope 2025+ tasks against the legacy view's 20,852. Swapping
+ * bluntly would turn every pre-2025 or out-of-scope task into "Task not
+ * found", including ones the not-yet-migrated project page still links to.
+ *
+ * So: canonical when the task is in scope, the legacy whole-company view
+ * otherwise, with `inScope` telling the page to say which it is showing. As
+ * F6 migrates the project page the fallback becomes rare on its own; it is
+ * never silent.
+ */
+export type TaskDetail = { task: TaskActualVsEstimate; inScope: boolean }
+
+type MetricTaskRow = {
+  task_id: number
+  project_id: number
+  project_name: string
+  task_name: string
+  assignee_id: number | null
+  estimate_hours: number | null
+  actual_hours: number
+  ratio: number | null
+  is_completed: boolean
+  completed_on: string | null
+  created_on: string
+  last_time_on: string | null
+  qa_iterations: number | null
+  qa_iterations_capped: boolean
+  qa_bugs: number | null
+  qa_bugs_capped: boolean
+  source: string | null
+  task_jira_key: string | null
+  project_jira_key: string | null
+}
+
+export async function fetchTaskDetail(taskId: number): Promise<TaskDetail | null> {
+  const canonical = await supabase
+    .from('v_metric_tasks')
+    .select(
+      'task_id, project_id, project_name, task_name, assignee_id, estimate_hours, actual_hours, ratio, is_completed, completed_on, created_on, last_time_on, qa_iterations, qa_iterations_capped, qa_bugs, qa_bugs_capped, source, task_jira_key, project_jira_key',
+    )
+    .eq('task_id', taskId)
+    .maybeSingle()
+  if (canonical.error) throw canonical.error
+
+  if (canonical.data) {
+    const r = canonical.data as MetricTaskRow
+    // v_metric_tasks carries assignee_id but not the name — assignee is
+    // display metadata in §5, never attribution, so it is a separate lookup
+    // rather than a column on the metric grain.
+    let assignee_name: string | null = null
+    if (r.assignee_id != null) {
+      const { data } = await supabase
+        .from('users')
+        .select('display_name')
+        .eq('id', r.assignee_id)
+        .maybeSingle()
+      assignee_name = (data?.display_name as string | undefined) ?? null
+    }
+    const { last_time_on, ...rest } = r
+    return { task: { ...rest, assignee_name, last_record_date: last_time_on }, inScope: true }
+  }
+
+  const legacy = await supabase
+    .from('v_task_actual_vs_estimate')
     .select('*')
+    .eq('task_id', taskId)
+    .maybeSingle()
+  if (legacy.error) throw legacy.error
+  if (!legacy.data) return null
+  return { task: legacy.data as TaskActualVsEstimate, inScope: false }
+}
+
+/**
+ * Contributors on one task. In scope this is the canonical grain, so duplicate
+ * accounts are already merged into one person (R6) — out of scope it falls
+ * back to the legacy view, which has no merge.
+ */
+export async function fetchTaskContributors(
+  taskId: number,
+  inScope = true,
+): Promise<TaskContributor[]> {
+  if (!inScope) {
+    const { data, error } = await supabase
+      .from('v_task_contributors')
+      .select('*')
+      .eq('task_id', taskId)
+      .order('hours', { ascending: false })
+    if (error) throw error
+    return (data ?? []) as TaskContributor[]
+  }
+
+  const { data, error } = await supabase
+    .from('v_metric_task_contributors')
+    .select('task_id, user_id, display_name, hours, share')
     .eq('task_id', taskId)
     .order('hours', { ascending: false })
   if (error) throw error
-  return (data ?? []) as TaskContributor[]
+  return ((data ?? []) as Array<{
+    task_id: number
+    user_id: number
+    display_name: string | null
+    hours: number
+    share: number | null
+  }>).map((r) => ({
+    task_id: r.task_id,
+    contributor_id: r.user_id,
+    contributor_name: r.display_name ?? `User #${r.user_id}`,
+    hours: Number(r.hours),
+    share: r.share == null ? null : Number(r.share),
+  }))
 }
 
 /* ── Canonical §5 metric layer (F2) ─────────────────────────────────────────
