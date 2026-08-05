@@ -7,13 +7,18 @@ import { FilterBar } from './FilterBar'
 import { SyncStatusBadge } from './SyncStatusBadge'
 import { TrackingSinceBanner } from './TrackingSinceBanner'
 
+/**
+ * §3's target order — Radar, Estimation, People, Projects (Quality and
+ * Write-offs join at F7). The legacy Dashboard sits last because it is the one
+ * page not in the target IA; §4.1 hands its KPI cards to Radar and its
+ * adoption/accuracy charts to Estimation, so it is a leftover, not a section.
+ */
 const navItems = [
   { to: '/radar' as const, label: 'Radar' },
-  { to: '/dashboard' as const, label: 'Dashboard' },
-  { to: '/overview' as const, label: 'Overview' },
-  { to: '/estimates' as const, label: 'Estimates' },
+  { to: '/estimation' as const, label: 'Estimation' },
   { to: '/people' as const, label: 'People' },
   { to: '/projects' as const, label: 'Projects' },
+  { to: '/dashboard' as const, label: 'Dashboard' },
 ]
 
 export function AppLayout() {
@@ -22,10 +27,13 @@ export function AppLayout() {
   const [filters, setFilters] = useState<Filters>(defaultFilters)
   const routerState = useRouterState()
   const pathname = routerState.location.pathname
-  // Radar answers "what needs attention now" over fixed signal windows and the
-  // Dashboard aggregates its own scope — neither takes the entity filters.
+  // Radar answers "what needs attention now" over fixed signal windows, the
+  // Dashboard aggregates its own scope, and Estimation declares its own scope
+  // (fixed-scope + maintenance) as the point of the page — none of the three
+  // takes the entity filters.
   const isRadar = pathname === '/' || pathname === '/radar'
   const isDashboard = pathname === '/dashboard'
+  const isEstimation = pathname === '/estimation'
   // /people, /projects, and the deep /tasks/<id> page are all scoped to a
   // single entity, so the global project + user multi-select adds no value
   // there. The list pages keep the FilterBar.
@@ -33,7 +41,7 @@ export function AppLayout() {
   const isProjectDetail = /^\/projects\/[^/]+/.test(pathname)
   const isTaskDetail = /^\/tasks\/[^/]+/.test(pathname)
   const hideFilterBar =
-    isRadar || isDashboard || isContributorDetail || isProjectDetail || isTaskDetail
+    isRadar || isDashboard || isEstimation || isContributorDetail || isProjectDetail || isTaskDetail
   // The list grids each get only their own entity filter:
   // /people filters by people, /projects by projects.
   const isPeopleList = pathname === '/people'

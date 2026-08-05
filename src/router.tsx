@@ -2,8 +2,7 @@ import { createRootRoute, createRoute, createRouter, redirect } from '@tanstack/
 import { AppLayout } from '@/components/AppLayout'
 import { RadarPage } from '@/pages/RadarPage'
 import { DashboardPage } from '@/pages/DashboardPage'
-import { OverviewPage } from '@/pages/OverviewPage'
-import { EstimatesPage } from '@/pages/EstimatesPage'
+import { EstimationPage } from '@/pages/EstimationPage'
 import { PeoplePage } from '@/pages/PeoplePage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
 import { ProjectDetailPage } from '@/pages/ProjectDetailPage'
@@ -66,9 +65,12 @@ const radarRoute = createRoute({
 })
 
 /**
- * The pre-redesign Dashboard, moved off `/` and kept reachable until F4 lands
- * the Estimation page — §4.1 sends its adoption/accuracy charts there, so
- * deleting it now would delete charts with nowhere to live.
+ * The pre-redesign Dashboard. F4 deleted `/overview` and `/estimates` per §3's
+ * kill list, but left this one standing: §8 scopes F4 to those two routes, and
+ * cutting a live page nobody asked to cut is not a deletion this session owns.
+ * Its adoption/accuracy charts are superseded by the Estimation page's own
+ * canonical trends, so the page is now duplicative — see the open question in
+ * docs/progress-log.md.
  */
 const dashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -77,18 +79,15 @@ const dashboardRoute = createRoute({
   validateSearch: periodSearchValidator(PERIOD_GROUPS.dashboard),
 })
 
-const overviewRoute = createRoute({
+/**
+ * §4.2. No `validateSearch`: the page has no period control, so it has no
+ * search contract to validate — every figure is the all-time canonical value
+ * and the two trends own their own windows.
+ */
+const estimationRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/overview',
-  component: OverviewPage,
-  validateSearch: periodSearchValidator(PERIOD_GROUPS.list),
-})
-
-const estimatesRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/estimates',
-  component: EstimatesPage,
-  validateSearch: periodSearchValidator(PERIOD_GROUPS.list),
+  path: '/estimation',
+  component: EstimationPage,
 })
 
 const peopleRoute = createRoute({
@@ -129,8 +128,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   radarRoute,
   dashboardRoute,
-  overviewRoute,
-  estimatesRoute,
+  estimationRoute,
   peopleRoute,
   projectsRoute,
   projectDetailRoute,

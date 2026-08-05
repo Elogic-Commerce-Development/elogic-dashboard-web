@@ -31,8 +31,10 @@ src/
 │   ├── supabase.ts              ← singleton supabase client
 │   ├── queries.ts               ← typed fetchers for every view
 │   ├── period.ts                ← THE period model: presets, ranges, groups, URL parsing
-│   ├── periodStats.ts           ← client-side period re-aggregation (F2 deletes this)
-│   ├── useListFilters.ts        ← list grids: FilterBar entities + URL period → Filters
+│   ├── periodStats.ts           ← client-side period re-aggregation (project detail only)
+│   ├── estimation.ts            ← §4.2 cuts of the calibration sample + its formatters
+│   ├── radarSignals.ts          ← §4.1 signal sentences · radarPolicy.ts ← display caps
+│   ├── errors.ts                ← describeError() for PostgREST's plain-object errors
 │   ├── filters.ts               ← Zod schema + defaultFilters + Filters type
 │   ├── FilterContext.ts         ← entity-filter context (projects/users)
 │   ├── utilization.ts           ← v_employee_day → utilization buckets
@@ -46,23 +48,30 @@ src/
     ├── TrackingSinceBanner.tsx  ← amber banner noting 2025-01-01 cutoff
     ├── SyncStatusBadge.tsx      ← reads v_sync_status, colored dot
     ├── DataTable.tsx            ← generic TanStack Table wrapper
-    └── metrics/
-        ├── TasksWithoutEstimatesTable.tsx
-        ├── OverrunTable.tsx
-        ├── EstimateVsActualTable.tsx
-        └── AccuracyByProjectTable.tsx
+    ├── radar/                   ← §4.1 Radar blocks (queue, bleeding-now, vitals)
+    └── estimation/              ← §4.2 Estimation blocks
+        ├── Section.tsx          ← Block / Panel / StatTile / LoadFailure shells
+        ├── CoverageBlock.tsx    ← + CoverageTrendChart.tsx
+        ├── CalibrationBlock.tsx ← + CalibrationCharts.tsx
+        └── OverrunBlock.tsx
 ```
+
+`components/metrics/` is gone: F4 deleted the four filter-driven tables with
+the Overview and Estimates pages they were the only consumers of.
 
 ## Data flow
 
 ```
 AppLayout
   ├── holds the entity Filters (projectIds / userIds) and renders <FilterBar>
+  │    — hidden on Radar, Estimation, Dashboard and every detail page, each of
+  │      which declares its own scope
   └── <Outlet/> → page
-       ├── reads its period from the URL (?period=…&from=…&to=…)
-       ├── list pages: useListFilters() merges period + entities into Filters
-       └── passes Filters down to each metrics/*Table
-            └── Table calls src/lib/queries.ts → Supabase view → DataTable
+       ├── grids (/people, /projects): period from the URL (?period=…), then
+       │   the canonical view for that grain (all time | one calendar month)
+       ├── Radar + Estimation: no period control at all; each metric owns its
+       │   window, and the page fetches the canonical v_metric_* views directly
+       └── every fetch goes through src/lib/queries.ts → Supabase view
 ```
 
 All data fetching is **inside each table component** — no global
@@ -115,9 +124,9 @@ npm run lint         # eslint
 1. Add the view to the backend repo migration + document in
    `elogic-dashboard-backend/docs/METRICS.md`.
 2. Add a typed row + fetcher in `src/lib/queries.ts`.
-3. Create `src/components/metrics/<Name>Table.tsx` — copy the closest
-   existing table as a starting point, define TanStack column defs, wire
-   the fetcher in a `useEffect` keyed on filters.
+3. Create the component next to the page that renders it (`components/radar/`,
+   `components/estimation/`, …) — copy the closest existing one, define
+   TanStack column defs, and render through `<DataTable>`.
 4. Render the new table from the relevant page in `src/pages/` (and add the
    route in `src/router.tsx` if it needs one).
 
@@ -132,9 +141,10 @@ npm run lint         # eslint
 - **AuthGate in `components/AuthGate.tsx`** (rendered by `main.tsx`):
   `supabase.auth.getSession()` is async; `ready` state prevents the login
   form flashing for already-signed-in users. Don't remove the `ready` gate.
-- **`v_task_actual_vs_estimate` filter:** always filter to
-  `estimate_hours IS NOT NULL` in the fetcher, otherwise the Estimate vs
-  Actual table shows rows with no estimate.
+- **`v_task_actual_vs_estimate` is a legacy (pre-§5) view** — whole company,
+  no date floor, back to 2017. Only `ProjectDetailPage` still reads it. New
+  work reads the canonical `v_metric_*` family; see the parity report for what
+  the two disagree about and why.
 - **Sign out:** `supabase.auth.signOut()` — the `onAuthStateChange` listener
   in AuthGate handles the re-render automatically.
 - **Recharts 3 Pie sectors:** put the per-slice `fill` on each data item, NOT
@@ -154,11 +164,11 @@ npm run lint         # eslint
   the router, and `periodSearchParams()` omits the preset when it equals the
   page default so a page at its default has a clean URL.
 - **`all_time` means "no date filter", not "since the tracking floor".**
-  `periodFilterRange()` returns `{from: undefined, to: undefined}` for it,
-  because `PeoplePage`/`ProjectsPage` switch between the server view and the
-  client period pipeline on `Boolean(from || to)`, and `fetchAccuracyByProject`
-  switches branches the same way. Resolving it to `2025-01-01` would silently
-  re-route those pages onto the period pipeline and move their numbers.
+  `periodRange('all_time')` returns the floor only as an *informational*
+  caption; a page that queries per period branches on the preset itself
+  (`PeoplePage` / `ProjectsPage`: `all_time` → the all-time canonical view,
+  anything else → the one-month view). Passing `2025-01-01` into a query
+  because `all_time` "means since 2025" would move numbers.
 - **`?period=` supersedes `?preset=`, and `3m/6m/12m/ytd/all` are legacy
   aliases.** `parsePeriodSearch()` still accepts both so pre-F1 bookmarks
   resolve to the period they always meant. Safe to drop once nobody's
