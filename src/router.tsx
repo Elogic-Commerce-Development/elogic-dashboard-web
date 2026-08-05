@@ -1,5 +1,6 @@
-import { createRootRoute, createRoute, createRouter } from '@tanstack/react-router'
+import { createRootRoute, createRoute, createRouter, redirect } from '@tanstack/react-router'
 import { AppLayout } from '@/components/AppLayout'
+import { RadarPage } from '@/pages/RadarPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { OverviewPage } from '@/pages/OverviewPage'
 import { EstimatesPage } from '@/pages/EstimatesPage'
@@ -44,9 +45,34 @@ const rootRoute = createRootRoute({
   component: AppLayout,
 })
 
-const dashboardRoute = createRoute({
+/**
+ * `/` is Radar's address per §3, and F3 ships it as a redirect rather than by
+ * mounting Radar on the index route: the old Dashboard still owns
+ * `?period=…` bookmarks, and a redirect keeps `/radar` as the one canonical
+ * URL people can link to and share.
+ */
+const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
+  beforeLoad: () => {
+    throw redirect({ to: '/radar' })
+  },
+})
+
+const radarRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/radar',
+  component: RadarPage,
+})
+
+/**
+ * The pre-redesign Dashboard, moved off `/` and kept reachable until F4 lands
+ * the Estimation page — §4.1 sends its adoption/accuracy charts there, so
+ * deleting it now would delete charts with nowhere to live.
+ */
+const dashboardRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/dashboard',
   component: DashboardPage,
   validateSearch: periodSearchValidator(PERIOD_GROUPS.dashboard),
 })
@@ -100,6 +126,8 @@ const taskDetailRoute = createRoute({
 })
 
 const routeTree = rootRoute.addChildren([
+  indexRoute,
+  radarRoute,
   dashboardRoute,
   overviewRoute,
   estimatesRoute,
