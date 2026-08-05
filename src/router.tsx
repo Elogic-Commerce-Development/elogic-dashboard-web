@@ -90,11 +90,21 @@ const estimationRoute = createRoute({
   component: EstimationPage,
 })
 
+/**
+ * §4.5. No `validateSearch`, for the same reason `/estimation` has none: F5
+ * turned this from a period-scoped grid into a page of coaching cards whose
+ * figures sit at four different grains on purpose — calibration is the
+ * all-time §5 sample, coverage all-time, load the last complete month, the
+ * trend the last six. One page-level period control would imply they move
+ * together. Each block states its own window instead.
+ *
+ * Pre-F5 bookmarks carrying `?period=…` still resolve: the param is simply
+ * ignored rather than rejected.
+ */
 const peopleRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/people',
   component: PeoplePage,
-  validateSearch: periodSearchValidator(PERIOD_GROUPS.list),
 })
 
 const projectsRoute = createRoute({
