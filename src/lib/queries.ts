@@ -1778,17 +1778,45 @@ export type CalibrationTask = {
   is_exact_match: boolean
 }
 
+/**
+ * ── Why this filters on `is_estimated` + `is_completed` and not on
+ *    `is_calibration_sample`, which is the column that means exactly this ─────
+ *
+ * Because *which column the filter names* is what decided whether this page
+ * loaded at all. Measured on production, three fetches of `v_metric_tasks` from
+ * one page:
+ *
+ *   assignee_id IS NULL            739 rows   0.5–0.8s   ← plain column
+ *   overrun_realized_hours > 0     293 rows   5.8–6.2s   ← computed column
+ *   is_calibration_sample = true   629 rows   8.2–8.4s   ← computed column, over the cap
+ *
+ * Row count does not explain it — the 739-row query is the fastest. A predicate
+ * on a plain column is pushed into the base scan; a predicate on a computed
+ * output column is not, so the whole view is evaluated first. That is the same
+ * nested-loop pathology S6/R12 diagnosed (the planner re-running
+ * `v_scope_tasks`' `SUM(value_hours)` per surviving row), reached from the
+ * client side instead of from a dependent view — and R12's fix does not
+ * transfer, because a PostgREST call has no consumer CTE to wrap.
+ *
+ * `is_calibration_sample` is defined as `is_estimated AND is_completed AND
+ * actual_hours > 0`. The first two are plain columns on `tasks`; the third is
+ * the aggregate, so it stays off the filter and the view's own
+ * `is_calibration_sample` boolean does the final cut **after** transport. That
+ * is not a re-derivation — it is the canonical flag, applied one step later.
+ * Cost is ~46 extra rows (the "estimated, never tracked" completions).
+ */
 export async function fetchCalibrationSample(): Promise<CalibrationTask[]> {
   const rows = await fetchAllPages<Record<string, unknown>>((from, to) =>
     supabase
       .from('v_metric_tasks')
-      .select('task_id, project_id, project_name, source, work_model, estimate_hours, actual_hours, ratio, completed_on, is_in_band, is_exact_match')
+      .select('task_id, project_id, project_name, source, work_model, estimate_hours, actual_hours, ratio, completed_on, is_in_band, is_exact_match, is_calibration_sample')
       .eq('is_estimating_segment', true)
-      .eq('is_calibration_sample', true)
+      .eq('is_estimated', true)
+      .eq('is_completed', true)
       .order('task_id', { ascending: true })
       .range(from, to),
   )
-  return rows.map((r) => ({
+  return rows.filter((r) => r.is_calibration_sample === true).map((r) => ({
     task_id: Number(r.task_id),
     project_id: Number(r.project_id),
     project_name: String(r.project_name ?? ''),
@@ -1891,12 +1919,21 @@ export async function fetchRealizedOverrunTasks(): Promise<BlowoutTask[]> {
       .eq('is_estimating_segment', true)
       .eq('is_completed', true)
       .eq('is_estimated', true)
-      .gt('overrun_realized_hours', 0)
-      .order('overrun_realized_hours', { ascending: false })
       .order('task_id', { ascending: true })
       .range(from, to),
   )
-  return rows.map((r) => ({
+  return rows
+    // Same reasoning as the calibration sample above: `overrun_realized_hours`
+    // is aggregate-derived, so filtering *and* sorting on it server-side is
+    // what cost this query 5.8–6.2s. The two plain-column filters stay on the
+    // server; the ">0" cut and the ranking happen here, over ~675 rows.
+    .filter((r) => Number(r.overrun_realized_hours ?? 0) > 0)
+    .sort(
+      (a, b) =>
+        Number(b.overrun_realized_hours ?? 0) - Number(a.overrun_realized_hours ?? 0) ||
+        Number(a.task_id) - Number(b.task_id),
+    )
+    .map((r) => ({
     task_id: Number(r.task_id),
     task_name: String(r.task_name ?? ''),
     project_id: Number(r.project_id),
