@@ -84,14 +84,14 @@ function sumKpiMonths(months: DashboardKpiMonth[], range: PeriodRange): GlobalKp
 }
 
 export function DashboardPage() {
-  const search = useSearch({ from: '/' })
+  const search = useSearch({ from: '/dashboard' })
   const navigate = useNavigate()
   const preset: PeriodPreset = search.period ?? PERIOD_GROUPS.dashboard.default
   const range = useMemo(() => periodRange(preset), [preset])
 
   function setPreset(next: PeriodPreset) {
     navigate({
-      to: '/',
+      to: '/dashboard',
       search: () => periodSearchParams(next, PERIOD_GROUPS.dashboard),
     })
   }

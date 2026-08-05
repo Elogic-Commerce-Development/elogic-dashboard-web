@@ -8,7 +8,8 @@ import { SyncStatusBadge } from './SyncStatusBadge'
 import { TrackingSinceBanner } from './TrackingSinceBanner'
 
 const navItems = [
-  { to: '/' as const, label: 'Dashboard' },
+  { to: '/radar' as const, label: 'Radar' },
+  { to: '/dashboard' as const, label: 'Dashboard' },
   { to: '/overview' as const, label: 'Overview' },
   { to: '/estimates' as const, label: 'Estimates' },
   { to: '/people' as const, label: 'People' },
@@ -21,14 +22,18 @@ export function AppLayout() {
   const [filters, setFilters] = useState<Filters>(defaultFilters)
   const routerState = useRouterState()
   const pathname = routerState.location.pathname
-  const isDashboard = pathname === '/'
+  // Radar answers "what needs attention now" over fixed signal windows and the
+  // Dashboard aggregates its own scope — neither takes the entity filters.
+  const isRadar = pathname === '/' || pathname === '/radar'
+  const isDashboard = pathname === '/dashboard'
   // /people, /projects, and the deep /tasks/<id> page are all scoped to a
   // single entity, so the global project + user multi-select adds no value
   // there. The list pages keep the FilterBar.
   const isContributorDetail = /^\/people\/[^/]+/.test(pathname)
   const isProjectDetail = /^\/projects\/[^/]+/.test(pathname)
   const isTaskDetail = /^\/tasks\/[^/]+/.test(pathname)
-  const hideFilterBar = isDashboard || isContributorDetail || isProjectDetail || isTaskDetail
+  const hideFilterBar =
+    isRadar || isDashboard || isContributorDetail || isProjectDetail || isTaskDetail
   // The list grids each get only their own entity filter:
   // /people filters by people, /projects by projects.
   const isPeopleList = pathname === '/people'
@@ -45,9 +50,10 @@ export function AppLayout() {
               </Link>
               <nav className="flex gap-1">
                 {navItems.map((item) => {
-                  const active = item.to === '/'
-                    ? pathname === '/'
-                    : pathname.startsWith(item.to)
+                  // `/` redirects to /radar, so the index path highlights Radar
+                  // during the hop rather than leaving the nav blank.
+                  const active =
+                    item.to === '/radar' ? isRadar : pathname.startsWith(item.to)
                   return (
                     <Link
                       key={item.to}

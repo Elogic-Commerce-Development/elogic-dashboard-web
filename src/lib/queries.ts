@@ -1133,3 +1133,394 @@ export async function fetchDashboardRecentUnestimated(limit = 5): Promise<Recent
     project_jira_key: t.project_jira_key,
   }))
 }
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * F3 — Radar (plan §4.1)
+ *
+ * Radar reads three canonical families and re-derives nothing:
+ *
+ *   attention queue   v_metric_exposure  (§5 exposure ranking, internal order)
+ *                     + v_metric_project_signals (the eight named signals)
+ *   bleeding now      v_metric_tasks     (is_live_overrun / is_approaching)
+ *   company vitals    v_metric_project_month + v_metric_person_month (R8)
+ *                     + v_metric_scope_summary (write-off, no monthly view yet)
+ *
+ * Every threshold behind a sig_* boolean lives in `v_metric_config` on the DB
+ * side — §4.1 is explicit that retuning is a SQL change, never a frontend one,
+ * so nothing here compares an hour against a literal.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** One in-scope project's eight §4.1 signals, beside the counts they fire on. */
+export type ProjectSignals = {
+  project_id: number
+  project_name: string
+  source: string | null
+  work_model: string
+  rate_band: string | null
+  rate_band_weight: number
+
+  sig_live_overrun: boolean
+  live_overrun_tasks: number
+  live_overrun_hours: number
+  live_overrun_recent_tasks: number
+
+  sig_approaching: boolean
+  approaching_tasks: number
+  approaching_hours: number
+
+  sig_second_qa_round: boolean
+  second_qa_tasks: number
+  second_qa_hours: number
+
+  sig_stuck: boolean
+  stuck_tasks: number
+  stuck_hours: number
+  stuck_estimate_hours: number
+
+  sig_spinning: boolean
+  hours_recent_4wk: number
+  completions_recent_30d: number
+  last_completion_on: string | null
+
+  sig_backlog_estimation_debt: boolean
+  backlog_net_growth_6wk: number
+  open_estimated_runway_hours: number
+  runway_weeks: number | null
+
+  /** NULL on Jira projects — they carry no billable_status (§4.4 "untagged"). */
+  sig_writeoff_drift: boolean | null
+  writeoff_pct: number | null
+  writeoff_baseline_pct: number | null
+  non_billable_hours: number
+
+  sig_coverage_decay: boolean
+  recent_adoption_pct: number | null
+  prior_adoption_pct: number | null
+  recent_unestimated_hours: number
+}
+
+export type RadarQueueRow = ProjectSignals & {
+  /** Σ hours-at-risk over the FIRING signals — the explainable part. */
+  exposure_hours: number
+  /** … × rate-band weight. §5: internal ordering only, never rendered. */
+  exposure_score: number
+  firing_signal_count: number
+}
+
+const SIGNAL_COLUMNS = [
+  'project_id', 'project_name', 'source', 'work_model', 'rate_band', 'rate_band_weight',
+  'sig_live_overrun', 'live_overrun_tasks', 'live_overrun_hours', 'live_overrun_recent_tasks',
+  'sig_approaching', 'approaching_tasks', 'approaching_hours',
+  'sig_second_qa_round', 'second_qa_tasks', 'second_qa_hours',
+  'sig_stuck', 'stuck_tasks', 'stuck_hours', 'stuck_estimate_hours',
+  'sig_spinning', 'hours_recent_4wk', 'completions_recent_30d', 'last_completion_on',
+  'sig_backlog_estimation_debt', 'backlog_net_growth_6wk', 'open_estimated_runway_hours', 'runway_weeks',
+  'sig_writeoff_drift', 'writeoff_pct', 'writeoff_baseline_pct', 'non_billable_hours',
+  'sig_coverage_decay', 'recent_adoption_pct', 'prior_adoption_pct', 'recent_unestimated_hours',
+].join(', ')
+
+/**
+ * The attention queue: every in-scope project with at least one firing signal,
+ * ranked by §5 exposure.
+ *
+ * Ordering is server-side and fully deterministic — score, then the raw hours,
+ * then the id. §4.1's whole argument for rate bands is that ranking must not
+ * collapse to signal count, so the sort key is never `firing_signal_count`.
+ */
+export async function fetchRadarQueue(): Promise<RadarQueueRow[]> {
+  const exposure = await supabase
+    .from('v_metric_exposure')
+    .select('project_id, exposure_hours, exposure_score, firing_signal_count')
+    .gt('firing_signal_count', 0)
+    .order('exposure_score', { ascending: false })
+    .order('exposure_hours', { ascending: false })
+    .order('project_id', { ascending: true })
+  if (exposure.error) throw exposure.error
+
+  const ranked = (exposure.data ?? []) as Array<{
+    project_id: number; exposure_hours: number; exposure_score: number; firing_signal_count: number
+  }>
+  if (ranked.length === 0) return []
+
+  const signals = await supabase
+    .from('v_metric_project_signals')
+    .select(SIGNAL_COLUMNS)
+    .in('project_id', ranked.map((r) => r.project_id))
+  if (signals.error) throw signals.error
+
+  const byId = new Map(
+    ((signals.data ?? []) as unknown as ProjectSignals[]).map((s) => [s.project_id, s]),
+  )
+
+  const rows: RadarQueueRow[] = []
+  for (const r of ranked) {
+    const s = byId.get(r.project_id)
+    if (!s) continue
+    rows.push({
+      ...s,
+      exposure_hours: Number(r.exposure_hours),
+      exposure_score: Number(r.exposure_score),
+      firing_signal_count: Number(r.firing_signal_count),
+    })
+  }
+  return rows
+}
+
+/** A task row for the two §4.1 "bleeding now" lists. */
+export type BleedingTask = {
+  task_id: number
+  task_name: string
+  project_id: number
+  project_name: string
+  source: string | null
+  task_jira_key: string | null
+  project_jira_key: string | null
+  assignee_id: number | null
+  estimate_hours: number
+  actual_hours: number
+  /** actual − estimate, > 0 only on the burning list. */
+  overrun_live_hours: number
+  /** actual ÷ estimate. 0.8–1.0 on the approaching list. */
+  consumption: number | null
+  rate_band: string | null
+  rate_band_weight: number
+  last_time_on: string | null
+  days_since_time: number | null
+  has_recent_time: boolean
+}
+
+const BLEEDING_COLUMNS =
+  'task_id, task_name, project_id, project_name, source, task_jira_key, project_jira_key, ' +
+  'assignee_id, estimate_hours, actual_hours, overrun_live_hours, consumption, ' +
+  'rate_band, rate_band_weight, last_time_on, days_since_time, has_recent_time'
+
+function toBleedingTask(t: Record<string, unknown>): BleedingTask {
+  return {
+    task_id: Number(t.task_id),
+    task_name: String(t.task_name ?? ''),
+    project_id: Number(t.project_id),
+    project_name: String(t.project_name ?? ''),
+    source: (t.source as string | null) ?? null,
+    task_jira_key: (t.task_jira_key as string | null) ?? null,
+    project_jira_key: (t.project_jira_key as string | null) ?? null,
+    assignee_id: t.assignee_id == null ? null : Number(t.assignee_id),
+    estimate_hours: Number(t.estimate_hours ?? 0),
+    actual_hours: Number(t.actual_hours ?? 0),
+    overrun_live_hours: Number(t.overrun_live_hours ?? 0),
+    consumption: t.consumption == null ? null : Number(t.consumption),
+    rate_band: (t.rate_band as string | null) ?? null,
+    rate_band_weight: Number(t.rate_band_weight ?? 1),
+    last_time_on: (t.last_time_on as string | null) ?? null,
+    days_since_time: t.days_since_time == null ? null : Number(t.days_since_time),
+    has_recent_time: Boolean(t.has_recent_time),
+  }
+}
+
+/**
+ * §4.1 "Bleeding now", list 1 — open tasks already past estimate *and* still
+ * burning (time inside `v_metric_config.stale_days`). §1.2 ranks this the
+ * strongest early-warning signal and calls the recently-active subset "the
+ * actionable core"; the idle remainder is the Stuck signal's job, not this
+ * list's, so the recency filter is deliberate.
+ */
+export async function fetchBurningTasks(): Promise<BleedingTask[]> {
+  const { data, error } = await supabase
+    .from('v_metric_tasks')
+    .select(BLEEDING_COLUMNS)
+    .eq('is_live_overrun', true)
+    .eq('has_recent_time', true)
+    .order('overrun_live_hours', { ascending: false })
+    .order('task_id', { ascending: true })
+  if (error) throw error
+  return ((data ?? []) as unknown as Record<string, unknown>[]).map(toBleedingTask)
+}
+
+/**
+ * §4.1 "Bleeding now", list 2 — open tasks at 80–100% of estimate, not yet
+ * over. §1.2: 80% consumption buys actionable lead time on roughly half of
+ * overruns (post-crossing tail median 4 days).
+ */
+export async function fetchApproachingTasks(): Promise<BleedingTask[]> {
+  const { data, error } = await supabase
+    .from('v_metric_tasks')
+    .select(BLEEDING_COLUMNS)
+    .eq('is_approaching', true)
+    .order('actual_hours', { ascending: false })
+    .order('task_id', { ascending: true })
+  if (error) throw error
+  return ((data ?? []) as unknown as Record<string, unknown>[]).map(toBleedingTask)
+}
+
+/** (project_id, month) hours — the queue's per-project sparkline. */
+export type ProjectMonthHours = { project_id: number; month: string; hours: number }
+
+export async function fetchProjectMonthHours(months: number): Promise<ProjectMonthHours[]> {
+  const { data, error } = await supabase
+    .from('v_metric_project_month')
+    .select('project_id, month, total_hours')
+    .gte('month', firstOfMonthsAgo(months - 1))
+    .order('month', { ascending: true })
+  if (error) throw error
+  return ((data ?? []) as Array<{ project_id: number; month: string; total_hours: number }>).map((r) => ({
+    project_id: r.project_id,
+    month: r.month,
+    hours: Number(r.total_hours),
+  }))
+}
+
+/** First day of the month `n` months before the current one, as `YYYY-MM-DD`. */
+export function firstOfMonthsAgo(n: number): string {
+  const now = new Date()
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - n, 1))
+  return d.toISOString().slice(0, 10)
+}
+
+/** The trailing `n` month-starts, oldest first — the axis both trends share. */
+export function monthAxis(n: number): string[] {
+  return Array.from({ length: n }, (_, i) => firstOfMonthsAgo(n - 1 - i))
+}
+
+export type VitalMonth = {
+  month: string
+  logged_hours: number
+  active_loggers: number
+  /** Hours-weighted coverage, estimating segments only (§4.1). */
+  coverage_pct: number | null
+}
+
+export type CompanyVitals = {
+  months: VitalMonth[]
+  /**
+   * The month in progress, `YYYY-MM-01`. Named rather than inferred from the
+   * array's tail: on a quiet 1st-of-the-month the newest row present is the
+   * *previous* month, and treating it as partial would drop a complete month
+   * off every headline.
+   */
+  current_month: string
+  /**
+   * §4.1 asks for a write-off trend tile. No monthly write-off view exists
+   * (v_metric_writeoff_by_* is all-time), so the tile ships as a current
+   * value with its scope split and no sparkline — see docs/progress-log.md.
+   */
+  writeoff_pct_in_scope: number | null
+  writeoff_pct_company: number | null
+  untagged_hours_in_scope: number
+}
+
+/**
+ * The four §4.1 vitals, monthly. R8's period aggregates are the only canonical
+ * grain that reaches back far enough, so the sparklines are per-month, not the
+ * per-week the plan sketches (see the F3 deviation note).
+ */
+export async function fetchCompanyVitals(months: number): Promise<CompanyVitals> {
+  const since = firstOfMonthsAgo(months - 1)
+
+  const [projectMonths, personMonths, writeoff, summary] = await Promise.all([
+    supabase
+      .from('v_metric_project_month')
+      .select('month, work_model, total_hours, hours_on_estimated')
+      .gte('month', since),
+    supabase
+      .from('v_metric_person_month')
+      .select('month, user_id, total_hours')
+      .gte('month', since)
+      .gt('total_hours', 0),
+    supabase
+      .from('v_metric_writeoff_by_segment')
+      .select('is_in_scope, untagged_hours')
+      .eq('is_in_scope', true),
+    supabase
+      .from('v_metric_scope_summary')
+      .select('writeoff_pct_in_scope, writeoff_pct_company')
+      .single(),
+  ])
+  if (projectMonths.error) throw projectMonths.error
+  if (personMonths.error) throw personMonths.error
+  if (writeoff.error) throw writeoff.error
+  if (summary.error) throw summary.error
+
+  type Acc = { hours: number; estHours: number; estSegHours: number; loggers: Set<number> }
+  const byMonth = new Map<string, Acc>()
+  const bucket = (m: string): Acc => {
+    let a = byMonth.get(m)
+    if (!a) {
+      a = { hours: 0, estHours: 0, estSegHours: 0, loggers: new Set() }
+      byMonth.set(m, a)
+    }
+    return a
+  }
+
+  for (const r of (projectMonths.data ?? []) as Array<{
+    month: string; work_model: string; total_hours: number; hours_on_estimated: number
+  }>) {
+    const a = bucket(r.month)
+    a.hours += Number(r.total_hours)
+    // §4.1: coverage of active work, "estimating segments only". T&M and
+    // internal projects have no estimates by design and would drag the line.
+    if (r.work_model === 'fixed_scope' || r.work_model === 'maintenance') {
+      a.estSegHours += Number(r.total_hours)
+      a.estHours += Number(r.hours_on_estimated)
+    }
+  }
+  for (const r of (personMonths.data ?? []) as Array<{ month: string; user_id: number }>) {
+    bucket(r.month).loggers.add(r.user_id)
+  }
+
+  const monthRows: VitalMonth[] = Array.from(byMonth.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([month, a]) => ({
+      month,
+      logged_hours: a.hours,
+      active_loggers: a.loggers.size,
+      coverage_pct: a.estSegHours > 0 ? (a.estHours / a.estSegHours) * 100 : null,
+    }))
+
+  const s = summary.data as { writeoff_pct_in_scope: number | null; writeoff_pct_company: number | null }
+  const untagged = ((writeoff.data ?? []) as Array<{ untagged_hours: number }>)
+    .reduce((sum, r) => sum + Number(r.untagged_hours ?? 0), 0)
+
+  return {
+    months: monthRows,
+    current_month: firstOfMonthsAgo(0),
+    writeoff_pct_in_scope: s?.writeoff_pct_in_scope == null ? null : Number(s.writeoff_pct_in_scope),
+    writeoff_pct_company: s?.writeoff_pct_company == null ? null : Number(s.writeoff_pct_company),
+    untagged_hours_in_scope: untagged,
+  }
+}
+
+/**
+ * §9 keeps the classification loop closed: "the Radar shows 'untagged
+ * projects' as its own alarm". An in-scope project with recent hours and no
+ * work-model tag ranks at the lowest band and sits outside the estimating
+ * segments, so its signals under-read until someone tags it.
+ */
+export async function fetchUntaggedActiveProjects(): Promise<number> {
+  const { count, error } = await supabase
+    .from('v_metric_project_signals')
+    .select('project_id', { count: 'exact', head: true })
+    .eq('work_model', 'unclassified')
+    .gt('hours_recent_4wk', 0)
+  if (error) throw error
+  return count ?? 0
+}
+
+/**
+ * id → display name for a known set of ids. Unlike `fetchUsers` this applies
+ * no archived/role filter: an assignee who has since left still has to render
+ * with their name on a live task row, not as "unassigned".
+ */
+export async function fetchUserNames(ids: number[]): Promise<Map<number, string>> {
+  const unique = Array.from(new Set(ids.filter((id) => Number.isFinite(id))))
+  if (unique.length === 0) return new Map()
+  const { data, error } = await supabase
+    .from('users')
+    .select('id, display_name')
+    .in('id', unique)
+  if (error) throw error
+  return new Map(
+    ((data ?? []) as Array<{ id: number; display_name: string | null }>).map((u) => [
+      u.id,
+      u.display_name ?? `#${u.id}`,
+    ]),
+  )
+}
