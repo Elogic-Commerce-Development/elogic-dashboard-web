@@ -1,25 +1,10 @@
 import { supabase } from './supabase'
-import type { Filters } from './filters'
 
 /**
  * AC user `class` values we analyse on the People grid + Users filter.
  * Everything else (Client, Client+, …) is dropped — they're not team members.
  */
 export const TEAM_ROLES = ['Owner', 'Member']
-
-export type TaskWithoutEstimate = {
-  id: number
-  name: string
-  project_id: number
-  project_name: string
-  assignee_id: number | null
-  assignee_name: string | null
-  created_on: string
-  due_on: string | null
-  source: string | null
-  task_jira_key: string | null
-  project_jira_key: string | null
-}
 
 export type TaskActualVsEstimate = {
   task_id: number
@@ -41,17 +26,6 @@ export type TaskActualVsEstimate = {
   qa_bugs_capped: boolean
   source: string | null
   task_jira_key: string | null
-  project_jira_key: string | null
-}
-
-export type EstimateAccuracyByProject = {
-  project_id: number
-  project_name: string
-  estimated_tasks: number
-  total_tasks: number
-  mean_ratio: number | null
-  median_ratio: number | null
-  source: string | null
   project_jira_key: string | null
 }
 
@@ -235,82 +209,6 @@ export type EmployeeDay = {
   tracked_hours: number
 }
 
-/**
- * `created_on` is a timestamptz; a bare `lte <date>` stops at that day's
- * 00:00 UTC and drops same-day tasks. Bump the To bound to end-of-day so the
- * range is inclusive. (`record_date` is a DATE column and doesn't need this.)
- */
-function createdOnTo(to: string): string {
-  return `${to}T23:59:59.999`
-}
-
-/** Continuous median, matching Postgres PERCENTILE_CONT(0.5). */
-function median(values: number[]): number | null {
-  if (values.length === 0) return null
-  const s = [...values].sort((a, b) => a - b)
-  const mid = Math.floor(s.length / 2)
-  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2
-}
-
-export async function fetchTasksWithoutEstimates(filters: Filters): Promise<TaskWithoutEstimate[]> {
-  let q = supabase
-    .from('v_tasks_without_estimates')
-    .select('*')
-    .order('created_on', { ascending: false })
-    .limit(500)
-
-  if (filters.projectIds.length > 0) q = q.in('project_id', filters.projectIds)
-  if (filters.userIds.length > 0) q = q.in('assignee_id', filters.userIds)
-  if (filters.from) q = q.gte('created_on', filters.from)
-  if (filters.to) q = q.lte('created_on', createdOnTo(filters.to))
-
-  const { data, error } = await q
-  if (error) throw error
-  return (data ?? []) as TaskWithoutEstimate[]
-}
-
-/**
- * Exact filtered row counts for the Overview accordion headers. Uses HEAD +
- * count so it stays cheap and reflects the true total (not the 500-row display
- * cap). Same filter chain as the two Overview tables.
- */
-export async function fetchOverviewCounts(
-  filters: Filters,
-): Promise<{ withoutEstimates: number; overrun: number }> {
-  const countOf = async (view: string): Promise<number> => {
-    let q = supabase.from(view).select('*', { count: 'exact', head: true })
-    if (filters.projectIds.length > 0) q = q.in('project_id', filters.projectIds)
-    if (filters.userIds.length > 0) q = q.in('assignee_id', filters.userIds)
-    if (filters.from) q = q.gte('created_on', filters.from)
-    if (filters.to) q = q.lte('created_on', createdOnTo(filters.to))
-    const { count, error } = await q
-    if (error) throw error
-    return count ?? 0
-  }
-  const [withoutEstimates, overrun] = await Promise.all([
-    countOf('v_tasks_without_estimates'),
-    countOf('v_tasks_overrun'),
-  ])
-  return { withoutEstimates, overrun }
-}
-
-export async function fetchTasksOverrun(filters: Filters): Promise<TaskActualVsEstimate[]> {
-  let q = supabase
-    .from('v_tasks_overrun')
-    .select('*')
-    .order('ratio', { ascending: false })
-    .limit(500)
-
-  if (filters.projectIds.length > 0) q = q.in('project_id', filters.projectIds)
-  if (filters.userIds.length > 0) q = q.in('assignee_id', filters.userIds)
-  if (filters.from) q = q.gte('created_on', filters.from)
-  if (filters.to) q = q.lte('created_on', createdOnTo(filters.to))
-
-  const { data, error } = await q
-  if (error) throw error
-  return (data ?? []) as TaskActualVsEstimate[]
-}
-
 export async function fetchAllTasksFiltered(projectIds: number[], userIds: number[]): Promise<TaskActualVsEstimate[]> {
   // PostgREST caps each response at 1000 rows by default. The outsourcing
   // scope can exceed that, so walk pages until we get a short page.
@@ -333,90 +231,6 @@ export async function fetchAllTasksFiltered(projectIds: number[], userIds: numbe
     offset += PAGE
   }
   return all
-}
-
-export async function fetchActualVsEstimate(filters: Filters): Promise<TaskActualVsEstimate[]> {
-  let q = supabase
-    .from('v_task_actual_vs_estimate')
-    .select('*')
-    .not('estimate_hours', 'is', null)
-    .order('created_on', { ascending: false })
-    .limit(500)
-
-  if (filters.projectIds.length > 0) q = q.in('project_id', filters.projectIds)
-  if (filters.userIds.length > 0) q = q.in('assignee_id', filters.userIds)
-  if (filters.from) q = q.gte('created_on', filters.from)
-  if (filters.to) q = q.lte('created_on', createdOnTo(filters.to))
-
-  const { data, error } = await q
-  if (error) throw error
-  return (data ?? []) as TaskActualVsEstimate[]
-}
-
-export async function fetchAccuracyByProject(filters: Filters): Promise<EstimateAccuracyByProject[]> {
-  // No date range → the all-time view.
-  if (!filters.from && !filters.to) {
-    let q = supabase
-      .from('v_estimate_accuracy_by_project')
-      .select('*')
-      .order('estimated_tasks', { ascending: false })
-    if (filters.projectIds.length > 0) q = q.in('project_id', filters.projectIds)
-    const { data, error } = await q
-    if (error) throw error
-    return (data ?? []) as EstimateAccuracyByProject[]
-  }
-
-  // Date range → recompute client-side over completed tasks created in the
-  // window, mirroring v_estimate_accuracy_by_project (completed tasks only,
-  // grouped by project, mean/median over non-null ratios). The all-time view
-  // can't be date-filtered, so walk v_task_actual_vs_estimate and aggregate.
-  type Row = { project_id: number; project_name: string; estimate_hours: number | null; ratio: number | null; source: string | null; project_jira_key: string | null }
-  const rows: Row[] = []
-  const PAGE = 1000
-  for (let offset = 0; ; offset += PAGE) {
-    let q = supabase
-      .from('v_task_actual_vs_estimate')
-      .select('project_id, project_name, estimate_hours, ratio, source, project_jira_key')
-      .eq('is_completed', true)
-      .order('task_id')
-      .range(offset, offset + PAGE - 1)
-    if (filters.projectIds.length > 0) q = q.in('project_id', filters.projectIds)
-    if (filters.from) q = q.gte('created_on', filters.from)
-    if (filters.to) q = q.lte('created_on', createdOnTo(filters.to))
-    const { data, error } = await q
-    if (error) throw error
-    const page = (data ?? []) as Row[]
-    rows.push(...page)
-    if (page.length < PAGE) break
-  }
-
-  type Acc = { project_name: string; total: number; estimated: number; ratios: number[]; source: string | null; project_jira_key: string | null }
-  const byProject = new Map<number, Acc>()
-  for (const r of rows) {
-    let acc = byProject.get(r.project_id)
-    if (!acc) {
-      acc = { project_name: r.project_name, total: 0, estimated: 0, ratios: [], source: r.source, project_jira_key: r.project_jira_key }
-      byProject.set(r.project_id, acc)
-    }
-    acc.total++
-    if (r.estimate_hours != null) acc.estimated++
-    if (r.ratio != null) acc.ratios.push(Number(r.ratio))
-  }
-
-  const result: EstimateAccuracyByProject[] = []
-  for (const [project_id, acc] of byProject.entries()) {
-    result.push({
-      project_id,
-      project_name: acc.project_name,
-      estimated_tasks: acc.estimated,
-      total_tasks: acc.total,
-      mean_ratio: acc.ratios.length ? acc.ratios.reduce((a, b) => a + b, 0) / acc.ratios.length : null,
-      median_ratio: median(acc.ratios),
-      source: acc.source,
-      project_jira_key: acc.project_jira_key,
-    })
-  }
-  return result.sort((a, b) => b.estimated_tasks - a.estimated_tasks)
 }
 
 export async function fetchSyncStatus(): Promise<SyncStatusRow | null> {
@@ -1587,4 +1401,481 @@ export async function fetchUserNames(ids: number[]): Promise<Map<number, string>
       u.display_name ?? `#${u.id}`,
     ]),
   )
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * §4.2 Estimation — "Is our work priced, and are the prices right?"
+ *
+ * SCOPE. Every fetcher below is restricted to the **estimating segments**
+ * (`fixed_scope` + `maintenance`), because §4.2 opens by saying so: T&M and
+ * internal work carries no estimates *by design*, and blending it into a
+ * coverage average manufactures a problem that isn't one. The restriction is
+ * always expressed as a filter on a canonical column — `is_estimating_segment`
+ * where the view exposes it, `work_model` where it exposes that instead —
+ * never re-derived here.
+ *
+ * GRAIN. There is no period switcher (see the F4 decision in the progress log):
+ * the coverage trend and the calibration trend each own their window, and every
+ * table is the all-time canonical figure over the 2025-01-01 task floor. That
+ * is exactly the grain `docs/parity-report.md` pins, which is what makes the
+ * page checkable against it.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** The two §5 segments where an estimate is part of the deal. */
+export const ESTIMATING_SEGMENTS = ['fixed_scope', 'maintenance'] as const
+
+/**
+ * PostgREST caps a response at 1000 rows. Every list on this page is well
+ * under that today (629 calibration tasks, 765 unassigned, 291 overruns), but
+ * "well under today" is exactly how the archive-pagination and time-record
+ * pagination bugs happened on the backend. Walk pages until one comes back
+ * short.
+ */
+async function fetchAllPages<T>(
+  build: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>,
+): Promise<T[]> {
+  const PAGE = 1000
+  const all: T[] = []
+  for (let offset = 0; ; offset += PAGE) {
+    const { data, error } = await build(offset, offset + PAGE - 1)
+    if (error) throw error
+    const page = (data ?? []) as T[]
+    all.push(...page)
+    if (page.length < PAGE) break
+  }
+  return all
+}
+
+export type SegmentCoverage = {
+  work_model: string
+  tasks: number
+  estimated_tasks: number
+  adoption_pct: number | null
+  hours: number
+  estimated_hours: number
+  unestimated_hours: number
+  coverage_pct: number | null
+}
+
+/**
+ * §5 coverage + adoption, per estimating segment. Two rows today
+ * (maintenance / fixed_scope); the page sums them for its headline and shows
+ * the split beside it, because §5's rule is "segment or lie".
+ */
+export async function fetchCoverageBySegment(): Promise<SegmentCoverage[]> {
+  const { data, error } = await supabase
+    .from('v_metric_coverage_by_segment')
+    .select('work_model, tasks, estimated_tasks, adoption_pct, hours, estimated_hours, unestimated_hours, coverage_pct')
+    .eq('is_estimating_segment', true)
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    work_model: String(r.work_model ?? 'unclassified'),
+    tasks: Number(r.tasks ?? 0),
+    estimated_tasks: Number(r.estimated_tasks ?? 0),
+    adoption_pct: r.adoption_pct == null ? null : Number(r.adoption_pct),
+    hours: Number(r.hours ?? 0),
+    estimated_hours: Number(r.estimated_hours ?? 0),
+    unestimated_hours: Number(r.unestimated_hours ?? 0),
+    coverage_pct: r.coverage_pct == null ? null : Number(r.coverage_pct),
+  }))
+}
+
+export type CoverageMonth = {
+  month: string
+  hours: number
+  estimated_hours: number
+  unestimated_hours: number
+  coverage_pct: number | null
+}
+
+/**
+ * §4.2's headline trend — unestimated hours per month, with the coverage line
+ * over it. R8's `v_metric_project_month` is grained on **record date**, so a
+ * month's bar is the hours actually logged that month; the estimated/
+ * unestimated split is the task's current flag. Same basis as Radar's coverage
+ * vitals tile, deliberately: two coverage lines on one product must not be
+ * computed two ways.
+ *
+ * Every month since the tracking floor, not a trailing window: the story §4.2
+ * tells is "71% of our effort is unpriced", and truncating the history would
+ * hide the 2025 baseline the 2026 recovery is measured against.
+ */
+export async function fetchCoverageTrend(): Promise<CoverageMonth[]> {
+  const rows = await fetchAllPages<{
+    month: string
+    total_hours: number
+    hours_on_estimated: number
+    hours_on_unestimated: number
+  }>((from, to) =>
+    supabase
+      .from('v_metric_project_month')
+      .select('month, total_hours, hours_on_estimated, hours_on_unestimated')
+      .in('work_model', ESTIMATING_SEGMENTS)
+      .order('month', { ascending: true })
+      .range(from, to),
+  )
+
+  const byMonth = new Map<string, { hours: number; est: number; unest: number }>()
+  for (const r of rows) {
+    const key = String(r.month).slice(0, 10)
+    const acc = byMonth.get(key) ?? { hours: 0, est: 0, unest: 0 }
+    acc.hours += Number(r.total_hours ?? 0)
+    acc.est += Number(r.hours_on_estimated ?? 0)
+    acc.unest += Number(r.hours_on_unestimated ?? 0)
+    byMonth.set(key, acc)
+  }
+
+  return Array.from(byMonth.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([month, a]) => ({
+      month,
+      hours: a.hours,
+      estimated_hours: a.est,
+      unestimated_hours: a.unest,
+      coverage_pct: a.hours > 0 ? (a.est / a.hours) * 100 : null,
+    }))
+}
+
+export type ProjectCoverageRow = {
+  project_id: number
+  project_name: string
+  source: string | null
+  work_model: string
+  rate_band: string | null
+  tasks: number
+  estimated_tasks: number
+  adoption_pct: number | null
+  hours: number
+  unestimated_hours: number
+  coverage_pct: number | null
+}
+
+/** §4.2's per-project hours-weighted coverage table. */
+export async function fetchCoverageByProject(): Promise<ProjectCoverageRow[]> {
+  const { data, error } = await supabase
+    .from('v_metric_coverage_by_project')
+    .select('project_id, project_name, source, work_model, rate_band, tasks, estimated_tasks, adoption_pct, hours, unestimated_hours, coverage_pct')
+    .eq('is_estimating_segment', true)
+    .order('unestimated_hours', { ascending: false })
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    project_id: Number(r.project_id),
+    project_name: String(r.project_name ?? ''),
+    source: (r.source as string | null) ?? null,
+    work_model: String(r.work_model ?? 'unclassified'),
+    rate_band: (r.rate_band as string | null) ?? null,
+    tasks: Number(r.tasks ?? 0),
+    estimated_tasks: Number(r.estimated_tasks ?? 0),
+    adoption_pct: r.adoption_pct == null ? null : Number(r.adoption_pct),
+    hours: Number(r.hours ?? 0),
+    unestimated_hours: Number(r.unestimated_hours ?? 0),
+    coverage_pct: r.coverage_pct == null ? null : Number(r.coverage_pct),
+  }))
+}
+
+export type PersonCoverageRow = {
+  user_id: number
+  display_name: string
+  tasks: number
+  hours: number
+  unestimated_hours: number
+  coverage_pct: number | null
+}
+
+/**
+ * §4.2's per-person unestimated-hours list, "within estimating projects only".
+ *
+ * Hours-weighted off the contributor grain, per §1.3 ("hours-weighted
+ * per-person unestimated work beats task-count adoption") — so this is *whose
+ * hours went onto unpriced work*, not whose name is on the task. It is not the
+ * §5 attribution rule and must never be labelled as blame for an estimate;
+ * that distinction is the whole point of §1.6's withdrawn Kotsan finding.
+ *
+ * Identities are already merged: `v_metric_coverage_by_person` reads through
+ * `v_metric_task_contributors`, which keys on the canonical id (R6).
+ */
+export async function fetchUnestimatedByPerson(): Promise<PersonCoverageRow[]> {
+  const { data, error } = await supabase
+    .from('v_metric_coverage_by_person')
+    .select('user_id, display_name, tasks, hours, unestimated_hours, coverage_pct')
+    .eq('is_estimating_segment', true)
+    .order('unestimated_hours', { ascending: false })
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    user_id: Number(r.user_id),
+    display_name: String(r.display_name ?? `#${r.user_id}`),
+    tasks: Number(r.tasks ?? 0),
+    hours: Number(r.hours ?? 0),
+    unestimated_hours: Number(r.unestimated_hours ?? 0),
+    coverage_pct: r.coverage_pct == null ? null : Number(r.coverage_pct),
+  }))
+}
+
+export type UnassignedBucket = {
+  tasks: number
+  hours: number
+  unestimated_hours: number
+}
+
+/**
+ * §4.2 wants the Unassigned bucket "as a first-class row", from §1.3's
+ * accountability limit: 16% of in-scope tasks have no assignee at all, so for
+ * that share of the work there is nobody to ask about the missing estimate.
+ *
+ * It is deliberately *not* a row in the per-person list above: that list is
+ * grained on who logged the hours, and an unassigned task's hours are already
+ * counted there under whoever worked it. This is a second, orthogonal fact
+ * about ownership, and merging the two would double-count the hours.
+ */
+export async function fetchUnassignedBucket(): Promise<UnassignedBucket> {
+  const rows = await fetchAllPages<{ actual_hours: number; is_estimated: boolean }>((from, to) =>
+    supabase
+      .from('v_metric_tasks')
+      .select('task_id, actual_hours, is_estimated')
+      .eq('is_estimating_segment', true)
+      .is('assignee_id', null)
+      .order('task_id', { ascending: true })
+      .range(from, to),
+  )
+  let hours = 0
+  let unestimated = 0
+  for (const r of rows) {
+    const h = Number(r.actual_hours ?? 0)
+    hours += h
+    if (!r.is_estimated) unestimated += h
+  }
+  return { tasks: rows.length, hours, unestimated_hours: unestimated }
+}
+
+/**
+ * One completed, estimated, actually-tracked task — the §5 calibration sample.
+ *
+ * The whole calibration block is built from this one fetch: the histogram, the
+ * quarterly trend, the by-estimate-size cut and the AC-vs-Jira benchmark are
+ * four cuts of the same rows, so they cannot disagree with each other. Only
+ * the *bucketing* happens on the client; every predicate on the row
+ * (`is_calibration_sample`, `is_in_band`, `is_exact_match`, `ratio`) is
+ * supplied by `v_metric_tasks`, per §2.3's "the frontend must never re-derive
+ * these predicates".
+ */
+export type CalibrationTask = {
+  task_id: number
+  task_name: string
+  project_id: number
+  project_name: string
+  source: string | null
+  task_jira_key: string | null
+  work_model: string
+  estimate_hours: number
+  actual_hours: number
+  ratio: number
+  completed_on: string | null
+  is_in_band: boolean
+  is_exact_match: boolean
+}
+
+export async function fetchCalibrationSample(): Promise<CalibrationTask[]> {
+  const rows = await fetchAllPages<Record<string, unknown>>((from, to) =>
+    supabase
+      .from('v_metric_tasks')
+      .select('task_id, task_name, project_id, project_name, source, task_jira_key, work_model, estimate_hours, actual_hours, ratio, completed_on, is_in_band, is_exact_match')
+      .eq('is_estimating_segment', true)
+      .eq('is_calibration_sample', true)
+      .order('task_id', { ascending: true })
+      .range(from, to),
+  )
+  return rows.map((r) => ({
+    task_id: Number(r.task_id),
+    task_name: String(r.task_name ?? ''),
+    project_id: Number(r.project_id),
+    project_name: String(r.project_name ?? ''),
+    source: (r.source as string | null) ?? null,
+    task_jira_key: (r.task_jira_key as string | null) ?? null,
+    work_model: String(r.work_model ?? 'unclassified'),
+    estimate_hours: Number(r.estimate_hours ?? 0),
+    actual_hours: Number(r.actual_hours ?? 0),
+    ratio: Number(r.ratio ?? 0),
+    completed_on: (r.completed_on as string | null) ?? null,
+    is_in_band: Boolean(r.is_in_band),
+    is_exact_match: Boolean(r.is_exact_match),
+  }))
+}
+
+export type ProjectCalibrationRow = {
+  project_id: number
+  project_name: string
+  source: string | null
+  work_model: string
+  n: number
+  median_ratio: number | null
+  mean_ratio: number | null
+  in_band_pct: number | null
+  exact_match_pct: number | null
+  exact_match_flagged: boolean
+  zero_tracked_tasks: number
+  zero_tracked_estimate_hours: number
+}
+
+/** §4.2: "exact-match% shown beside in-band% at every grain" — project grain. */
+export async function fetchCalibrationByProject(): Promise<ProjectCalibrationRow[]> {
+  const { data, error } = await supabase
+    .from('v_metric_calibration_by_project')
+    .select('project_id, project_name, source, work_model, n, median_ratio, mean_ratio, in_band_pct, exact_match_pct, exact_match_flagged, zero_tracked_tasks, zero_tracked_estimate_hours')
+    .in('work_model', ESTIMATING_SEGMENTS)
+    .order('n', { ascending: false })
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    project_id: Number(r.project_id),
+    project_name: String(r.project_name ?? ''),
+    source: (r.source as string | null) ?? null,
+    work_model: String(r.work_model ?? 'unclassified'),
+    n: Number(r.n ?? 0),
+    median_ratio: r.median_ratio == null ? null : Number(r.median_ratio),
+    mean_ratio: r.mean_ratio == null ? null : Number(r.mean_ratio),
+    in_band_pct: r.in_band_pct == null ? null : Number(r.in_band_pct),
+    exact_match_pct: r.exact_match_pct == null ? null : Number(r.exact_match_pct),
+    exact_match_flagged: Boolean(r.exact_match_flagged),
+    zero_tracked_tasks: Number(r.zero_tracked_tasks ?? 0),
+    zero_tracked_estimate_hours: Number(r.zero_tracked_estimate_hours ?? 0),
+  }))
+}
+
+/**
+ * §5's "estimated, never tracked" — completed estimated tasks with zero actual
+ * hours. Excluded from the calibration sample on purpose (a 0/8 ratio is not a
+ * 100% underrun, it is missing data), and reported beside it so the two
+ * "accuracy" numbers §1.5.5 describes can never disagree again.
+ */
+export type ZeroTracked = { tasks: number; estimate_hours: number }
+
+export async function fetchZeroTracked(): Promise<ZeroTracked> {
+  const { data, error } = await supabase
+    .from('v_metric_calibration_by_segment')
+    .select('zero_tracked_tasks, zero_tracked_estimate_hours')
+    .eq('is_estimating_segment', true)
+  if (error) throw error
+  const rows = (data ?? []) as Array<{ zero_tracked_tasks: number; zero_tracked_estimate_hours: number }>
+  return {
+    tasks: rows.reduce((s, r) => s + Number(r.zero_tracked_tasks ?? 0), 0),
+    estimate_hours: rows.reduce((s, r) => s + Number(r.zero_tracked_estimate_hours ?? 0), 0),
+  }
+}
+
+export type ProjectOverrunRow = {
+  project_id: number
+  project_name: string
+  source: string | null
+  work_model: string
+  rate_band: string | null
+  realized_overrun_tasks: number
+  realized_overrun_hours: number
+}
+
+/**
+ * §4.2's overrun economics is **realized** — completed work, where the bill is
+ * already known. Live overrun is Radar's job (§4.1) and carries D3's bucket
+ * exclusion; mixing the two here would put a moving number next to a settled
+ * one under one heading.
+ */
+export async function fetchRealizedOverrunByProject(): Promise<ProjectOverrunRow[]> {
+  const { data, error } = await supabase
+    .from('v_metric_overrun_by_project')
+    .select('project_id, project_name, source, work_model, rate_band, realized_overrun_tasks, realized_overrun_hours')
+    .in('work_model', ESTIMATING_SEGMENTS)
+    .order('realized_overrun_hours', { ascending: false })
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    project_id: Number(r.project_id),
+    project_name: String(r.project_name ?? ''),
+    source: (r.source as string | null) ?? null,
+    work_model: String(r.work_model ?? 'unclassified'),
+    rate_band: (r.rate_band as string | null) ?? null,
+    realized_overrun_tasks: Number(r.realized_overrun_tasks ?? 0),
+    realized_overrun_hours: Number(r.realized_overrun_hours ?? 0),
+  }))
+}
+
+export type PersonOverrunRow = {
+  user_id: number
+  display_name: string
+  realized_overrun_tasks: number
+  realized_overrun_hours: number
+}
+
+/**
+ * Realized overrun per person under the **§5 attribution rule** — the top
+ * contributor at ≥ 40% of a task's hours, ties left unattributed. Never the
+ * assignee of record.
+ *
+ * `v_metric_overrun_by_person` is grained in-scope-wide with no segment
+ * column. That is not a scope leak here: the excluded segments (`tm_outstaff`,
+ * `unclassified`) hold **zero estimated tasks**, so they contribute no overrun
+ * at all — the page footnotes this rather than filtering a column the view
+ * does not expose.
+ */
+export async function fetchRealizedOverrunByPerson(): Promise<PersonOverrunRow[]> {
+  const { data, error } = await supabase
+    .from('v_metric_overrun_by_person')
+    .select('user_id, display_name, realized_overrun_tasks, realized_overrun_hours')
+    .gt('realized_overrun_hours', 0)
+    .order('realized_overrun_hours', { ascending: false })
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    user_id: Number(r.user_id),
+    display_name: String(r.display_name ?? `#${r.user_id}`),
+    realized_overrun_tasks: Number(r.realized_overrun_tasks ?? 0),
+    realized_overrun_hours: Number(r.realized_overrun_hours ?? 0),
+  }))
+}
+
+export type BlowoutTask = {
+  task_id: number
+  task_name: string
+  project_id: number
+  project_name: string
+  source: string | null
+  task_jira_key: string | null
+  estimate_hours: number
+  actual_hours: number
+  overrun_hours: number
+  ratio: number | null
+  completed_on: string | null
+}
+
+/**
+ * Every completed estimated task that finished over its estimate, biggest
+ * excess first.
+ *
+ * §4.2 asks for "the top-30 blowout queue (42% of overrun hours)". The whole
+ * distribution is fetched rather than `LIMIT 30` so the page can *show* that
+ * concentration instead of asserting it — the top-10 and top-30 shares are
+ * computed against the same rows the table is drawn from, so a reader can
+ * audit the claim from what is on screen.
+ */
+export async function fetchRealizedOverrunTasks(): Promise<BlowoutTask[]> {
+  const rows = await fetchAllPages<Record<string, unknown>>((from, to) =>
+    supabase
+      .from('v_metric_tasks')
+      .select('task_id, task_name, project_id, project_name, source, task_jira_key, estimate_hours, actual_hours, overrun_realized_hours, ratio, completed_on')
+      .eq('is_estimating_segment', true)
+      .eq('is_completed', true)
+      .eq('is_estimated', true)
+      .gt('overrun_realized_hours', 0)
+      .order('overrun_realized_hours', { ascending: false })
+      .order('task_id', { ascending: true })
+      .range(from, to),
+  )
+  return rows.map((r) => ({
+    task_id: Number(r.task_id),
+    task_name: String(r.task_name ?? ''),
+    project_id: Number(r.project_id),
+    project_name: String(r.project_name ?? ''),
+    source: (r.source as string | null) ?? null,
+    task_jira_key: (r.task_jira_key as string | null) ?? null,
+    estimate_hours: Number(r.estimate_hours ?? 0),
+    actual_hours: Number(r.actual_hours ?? 0),
+    overrun_hours: Number(r.overrun_realized_hours ?? 0),
+    ratio: r.ratio == null ? null : Number(r.ratio),
+    completed_on: (r.completed_on as string | null) ?? null,
+  }))
 }

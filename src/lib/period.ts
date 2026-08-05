@@ -11,11 +11,13 @@
  * All three now speak the `PeriodPreset` vocabulary below, are selected through
  * the single `<PeriodSwitcher>` component, and live in the URL as `?period=`.
  *
- * **Selection layer only.** F1 deliberately did not touch how data for a period
- * is *fetched*: `periodRange()` / `periodFilterRange()` hand the same
- * `{from,to}` ISO strings to the same fetchers as before, and custom ranges
- * still ride the old client-side pipeline. Swapping the fetchers onto the
- * canonical `v_metric_*` views is F2.
+ * **Selection layer only.** This module resolves a preset to `{from,to}`; what
+ * a page does with that is the page's business. F2 moved the grids onto the
+ * canonical `v_metric_*` views, which answer at exactly two grains, so
+ * `PeoplePage` / `ProjectsPage` branch on the preset itself (`all_time` vs one
+ * calendar month) rather than on a date range. F4 removed the last consumer of
+ * the old `periodFilterRange()` shim along with the Overview / Estimates pages
+ * it fed.
  *
  * ISO weeks: Monday is the first day of the week. All date math is UTC to
  * avoid client-timezone drift on the day boundary.
@@ -113,7 +115,14 @@ export const PERIOD_GROUPS = {
     secondary: [],
     default: 'all_time',
   },
-  /** Overview / Estimates list grids (both on the F4 kill list). */
+  /**
+   * The permissive group the `/people` and `/projects` **routes** validate
+   * their URL against. It outlives the Overview / Estimates pages it was built
+   * for (deleted in F4) because those two routes deliberately accept a wider
+   * set than their pages offer and re-validate against `grid` in the component
+   * — so a pre-F2 bookmark reaches the page and falls back to its default
+   * instead of being rejected at the router.
+   */
   list: {
     primary: ['all_time', 'current_month', 'previous_month'],
     secondary: [
@@ -178,8 +187,9 @@ export function periodRange(
     }
     case 'all_time':
       // Informational range (the switcher caption, and the Dashboard's month
-      // enumeration). Pages that filter a query treat the preset itself as
-      // "no period filter" — see periodFilterRange.
+      // enumeration). A page that queries per period must branch on the preset
+      // itself — `all_time` means "no date filter", not "since the floor", and
+      // resolving it to TRACKING_FLOOR in a query would move numbers.
       return { from: TRACKING_FLOOR, to: toIso(today) }
     case 'custom':
       return {
@@ -187,28 +197,6 @@ export function periodRange(
         to: customTo ?? toIso(today),
       }
   }
-}
-
-/**
- * The period expressed as the `Filters` date bounds the list-page fetchers
- * already consume.
- *
- * `all_time` deliberately resolves to **no bounds**. Every list fetcher treats
- * "no from/to" as its all-time path — `PeoplePage` / `ProjectsPage` switch
- * between the server view and the client period pipeline on
- * `Boolean(from || to)`, and `fetchAccuracyByProject` switches between the
- * pre-aggregated view and a client-side recompute the same way. Resolving
- * `all_time` to the tracking floor instead would silently re-route those pages
- * onto the period pipeline and move their numbers. Don't "fix" it.
- */
-export function periodFilterRange(
-  preset: PeriodPreset,
-  customFrom?: string,
-  customTo?: string,
-): { from: string | undefined; to: string | undefined } {
-  if (preset === 'all_time') return { from: undefined, to: undefined }
-  const range = periodRange(preset, customFrom, customTo)
-  return { from: range.from, to: range.to }
 }
 
 /**

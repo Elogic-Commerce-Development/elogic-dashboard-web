@@ -60,7 +60,7 @@ function Tile({
   series?: number[]
   lastIsPartial?: boolean
   delta?: React.ReactNode
-  to?: '/projects' | '/people' | '/estimates'
+  to?: '/projects' | '/people' | '/estimation'
   footnote?: string
 }) {
   const body = (
@@ -184,7 +184,7 @@ export function VitalsTiles({
         series={coverageSeries}
         lastIsPartial={partial !== null}
         delta={<Delta from={prior?.coverage_pct ?? null} to={last?.coverage_pct ?? null} direction="up_good" suffix="pts" />}
-        to="/estimates"
+        to="/estimation"
         footnote="Hours-weighted, fixed-scope + maintenance only. T&M and internal work has no estimates by design."
       />
     </div>

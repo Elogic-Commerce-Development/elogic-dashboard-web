@@ -193,7 +193,7 @@ export function DashboardPage() {
         <ShortlistCard
           title="Active overruns (last 30 days)"
           description="Overrun tasks with the most hours tracked recently. Always last 30 days, independent of selected period."
-          viewAllTo="/overview"
+          viewAllTo="/radar"
           rows={topOverruns}
           renderRow={(row) => (
             <div className="flex items-center justify-between gap-2">
@@ -242,7 +242,7 @@ export function DashboardPage() {
         <ShortlistCard
           title="Unestimated with recent time (last 30 days)"
           description="Open tasks without estimates being actively worked on. Always last 30 days, independent of selected period."
-          viewAllTo="/overview"
+          viewAllTo="/estimation"
           rows={topUnestimated}
           renderRow={(row) => (
             <div className="flex items-center justify-between gap-2">
@@ -296,7 +296,12 @@ function ShortlistCard<T>({
 }: {
   title: string
   description: string
-  viewAllTo: string
+  /**
+   * A literal union, not `string`: `to={someString}` type-checks against any
+   * route, which is how both of these kept pointing at `/overview` after F4
+   * deleted it. Narrowing it makes a dead target a build failure.
+   */
+  viewAllTo: '/radar' | '/estimation'
   rows: T[]
   renderRow: (row: T, index: number) => React.ReactNode
 }) {

@@ -64,7 +64,7 @@ src/
 ├── lib/
 │   ├── supabase.ts                # Supabase client singleton
 │   ├── period.ts                  # The period model (presets, ranges, groups)
-│   ├── useListFilters.ts          # List grids: URL period + entity filters
+│   ├── estimation.ts              # §4.2 calibration cuts + formatters
 │   ├── filters.ts                 # Zod schema for the entity filters
 │   ├── format.ts                  # Hours / ratios / dates
 │   └── queries.ts                 # Typed fetchers per metric view
@@ -77,27 +77,26 @@ src/
     ├── DataTable.tsx              # TanStack Table wrapper
     ├── SyncStatusBadge.tsx        # Reads v_sync_status
     ├── TrackingSinceBanner.tsx    # "Tracking from 2025-01-01" honesty banner
-    └── metrics/                   # One component per metric view
-        ├── TasksWithoutEstimatesTable.tsx
-        ├── OverrunTable.tsx
-        ├── EstimateVsActualTable.tsx
-        └── AccuracyByProjectTable.tsx
+    ├── radar/                     # §4.1 Radar blocks
+    └── estimation/                # §4.2 Estimation blocks
 ```
 
 Routes:
 
 | Route | Contents |
 |---|---|
-| `/` **Dashboard** | KPI tiles, adoption + accuracy charts, quality signals, 30-day shortlists |
-| `/overview` | Tasks without estimates, Tasks overrun |
-| `/estimates` | Estimate vs actual, Accuracy by project |
+| `/` → `/radar` **Radar** | Attention queue, bleeding-now task lists, company vitals |
+| `/estimation` | Coverage (unpriced work), calibration, overrun economics |
 | `/people` · `/people/$userId` | Contributor grid · person detail (utilization, tasks) |
 | `/projects` · `/projects/$projectId` | Project grid · project detail |
 | `/tasks/$taskId` | One task's economics |
+| `/dashboard` | The pre-redesign home. Superseded by Radar + Estimation; kept reachable, not in the target IA |
 
-Every route selects its period through the same `<PeriodSwitcher>`, stored in
-the URL as `?period=…` (plus `from`/`to` for a custom range). The list grids
-additionally consume the project/assignee multi-selects from `FilterBar`.
+Radar and Estimation have no period control: every signal or figure on them is
+defined against a window the metric itself owns. The grids and detail pages
+select a period through `<PeriodSwitcher>`, stored in the URL as `?period=…`
+(plus `from`/`to` for a custom range), and the grids additionally consume the
+project/assignee multi-selects from `FilterBar`.
 
 ## Adding a new metric
 
@@ -105,7 +104,7 @@ additionally consume the project/assignee multi-selects from `FilterBar`.
 2. **Backend repo**: `php artisan migrate` against Supabase
 3. **This repo**: add a typed fetcher in `src/lib/queries.ts`
 4. **This repo**: build a `<NewMetricTable>` component in
-   `src/components/metrics/`
+   the folder for its page (`src/components/estimation/`, `radar/`, …)
 5. **This repo**: render it from the relevant page in `src/pages/`
 6. Commit, push — Vercel auto-deploys
 
