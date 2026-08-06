@@ -14,6 +14,7 @@ import { supabase } from '@/lib/supabase'
 import {
   fetchProjectBulkCloseDays,
   fetchProjectContribRows,
+  fetchProjectEstimatingFlag,
   fetchProjectFlowRows,
   fetchProjectMonthSeries,
   fetchProjectPeriodRows,
@@ -262,6 +263,8 @@ export function ProjectDetailPage() {
   // Static bundle — per-project facts that do not depend on the period pill.
   const [signalsRow, setSignalsRow] = useState<ProjectSignals | null>(null)
   const [signalsLoaded, setSignalsLoaded] = useState(false)
+  /** Canonical §5 flag from the coverage view — null until known (or no coverage row). */
+  const [estSeg, setEstSeg] = useState<boolean | null>(null)
   const [contribRows, setContribRows] = useState<ProjectContribRow[] | null>(null)
   const [monthSeries, setMonthSeries] = useState<ProjectMonthRow[] | null>(null)
   const [flowRows, setFlowRows] = useState<ProjectFlowRow[] | null>(null)
@@ -291,18 +294,21 @@ export function ProjectDetailPage() {
   useEffect(() => {
     let cancelled = false
     async function loadStatic() {
+      setProject(null)
       setSignalsLoaded(false)
       setStaticErrors({})
       setSignalsRow(null)
+      setEstSeg(null)
       setContribRows(null)
       setMonthSeries(null)
       setFlowRows(null)
       setBulkDays(null)
       setMetaError(null)
 
-      const [meta, sig, contrib, series, flow, bulk] = await Promise.allSettled([
+      const [meta, sig, seg, contrib, series, flow, bulk] = await Promise.allSettled([
         supabase.from('projects').select('id, name, is_completed, source, jira_key').eq('id', pid).maybeSingle(),
         fetchProjectSignalsRow(pid),
+        fetchProjectEstimatingFlag(pid),
         fetchProjectContribRows(pid),
         fetchProjectMonthSeries(pid),
         fetchProjectFlowRows(pid),
@@ -318,10 +324,14 @@ export function ProjectDetailPage() {
         setSignalsRow(sig.value)
         setSignalsLoaded(true)
       } else errs.signals = describeError(sig.reason)
+      if (seg.status === 'fulfilled') setEstSeg(seg.value)
+      // The trend chart's estimated/unestimated split is gated on the canonical
+      // flag; without it the chart would have to guess a §5 predicate.
+      else errs.trend = describeError(seg.reason)
       if (contrib.status === 'fulfilled') setContribRows(contrib.value)
       else errs.contributors = describeError(contrib.reason)
       if (series.status === 'fulfilled') setMonthSeries(series.value)
-      else errs.trend = describeError(series.reason)
+      else errs.trend = errs.trend ?? describeError(series.reason)
       // The flow chart is wrong without its bulk-close exclusion, so either
       // failure fails the section — a mass-close rendering as an organic month
       // is exactly what §5's guard exists to prevent.
@@ -390,7 +400,10 @@ export function ProjectDetailPage() {
     const realizedH = tasks.reduce((s, t) => s + t.overrun_realized_hours, 0)
     const live = tasks.filter((t) => t.is_live_overrun)
     const liveH = live.reduce((s, t) => s + t.overrun_live_hours, 0)
-    const buckets = tasks.filter((t) => t.is_bucket && !t.is_completed)
+    // Same basis as v_metric_overrun_by_project.bucket_tasks_excluded: open
+    // bucket tasks actually over their estimate (a manually-flagged bucket that
+    // is not over yet excludes nothing).
+    const buckets = tasks.filter((t) => t.is_bucket && !t.is_completed && t.overrun_hours > 0)
     const bucketH = buckets.reduce((s, t) => s + t.overrun_hours, 0)
     const approaching = tasks.filter((t) => t.is_approaching)
     return {
@@ -632,54 +645,65 @@ export function ProjectDetailPage() {
           ) : modeLoading ? (
             <Loading what="task metrics" />
           ) : isAllTime ? (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-              <KpiCard
-                label="Tasks w/o estimates"
-                value={String(allTimeMetrics.unest)}
-                sub={`${allTimeMetrics.unestOpen} open`}
-                color={allTimeMetrics.unest > 0 ? 'amber' : 'emerald'}
-                active={taskFilter === 'unestimated'}
-                onClick={() => toggleFilter('unestimated')}
-              />
-              <KpiCard
-                label="Open w/o estimate, active"
-                value={String(allTimeMetrics.unestOpenActive)}
-                sub="open + tracked time"
-                color={allTimeMetrics.unestOpenActive > 0 ? 'orange' : 'emerald'}
-                active={taskFilter === 'open-unestimated-active'}
-                onClick={() => toggleFilter('open-unestimated-active')}
-              />
-              <KpiCard
-                label="Realized overrun"
-                value={formatHours(allTimeMetrics.realizedH)}
-                sub={`${allTimeMetrics.realizedN} completed tasks`}
-                color={allTimeMetrics.realizedH > 0 ? 'red' : 'emerald'}
-                active={taskFilter === 'overrun-realized'}
-                onClick={() => toggleFilter('overrun-realized')}
-              />
-              <KpiCard
-                label="Live overrun"
-                value={formatHours(allTimeMetrics.liveH)}
-                sub={`${allTimeMetrics.liveN} open${allTimeMetrics.bucketN > 0 ? ` · ${allTimeMetrics.bucketN} bucket excl.` : ''}`}
-                color={allTimeMetrics.liveH > 0 ? 'red' : 'emerald'}
-                active={taskFilter === 'overrun-live'}
-                onClick={() => toggleFilter('overrun-live')}
-              />
-              <KpiCard
-                label="Approaching estimate"
-                value={String(allTimeMetrics.approachingN)}
-                sub="80–100% consumed"
-                color={allTimeMetrics.approachingN > 0 ? 'amber' : 'emerald'}
-                active={taskFilter === 'approaching'}
-                onClick={() => toggleFilter('approaching')}
-              />
-              <KpiCard
-                label="Total tasks"
-                value={String(tasks.length)}
-                color={taskFilter !== 'all' ? 'blue' : 'neutral'}
-                onClick={() => { setTaskFilter('all'); setTasksOpen(true) }}
-              />
-            </div>
+            <>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                {/* §2 "segment or lie": on non-estimating segments unestimated work is
+                    expected, not an alarm — the counts stay, the alarm colors go. */}
+                <KpiCard
+                  label="Tasks w/o estimates"
+                  value={String(allTimeMetrics.unest)}
+                  sub={`${allTimeMetrics.unestOpen} open`}
+                  color={estSeg === false ? 'neutral' : allTimeMetrics.unest > 0 ? 'amber' : 'emerald'}
+                  active={taskFilter === 'unestimated'}
+                  onClick={() => toggleFilter('unestimated')}
+                />
+                <KpiCard
+                  label="Open w/o estimate, active"
+                  value={String(allTimeMetrics.unestOpenActive)}
+                  sub="open + tracked time"
+                  color={estSeg === false ? 'neutral' : allTimeMetrics.unestOpenActive > 0 ? 'orange' : 'emerald'}
+                  active={taskFilter === 'open-unestimated-active'}
+                  onClick={() => toggleFilter('open-unestimated-active')}
+                />
+                <KpiCard
+                  label="Realized overrun"
+                  value={formatHours(allTimeMetrics.realizedH)}
+                  sub={`${allTimeMetrics.realizedN} completed tasks`}
+                  color={estSeg === false ? 'neutral' : allTimeMetrics.realizedH > 0 ? 'red' : 'emerald'}
+                  active={taskFilter === 'overrun-realized'}
+                  onClick={() => toggleFilter('overrun-realized')}
+                />
+                <KpiCard
+                  label="Live overrun"
+                  value={formatHours(allTimeMetrics.liveH)}
+                  sub={`${allTimeMetrics.liveN} open${allTimeMetrics.bucketN > 0 ? ` · ${allTimeMetrics.bucketN} bucket excl.` : ''}`}
+                  color={estSeg === false ? 'neutral' : allTimeMetrics.liveH > 0 ? 'red' : 'emerald'}
+                  active={taskFilter === 'overrun-live'}
+                  onClick={() => toggleFilter('overrun-live')}
+                />
+                <KpiCard
+                  label="Approaching estimate"
+                  value={String(allTimeMetrics.approachingN)}
+                  sub="80–100% consumed"
+                  color={estSeg === false ? 'neutral' : allTimeMetrics.approachingN > 0 ? 'amber' : 'emerald'}
+                  active={taskFilter === 'approaching'}
+                  onClick={() => toggleFilter('approaching')}
+                />
+                <KpiCard
+                  label="Total tasks"
+                  value={String(tasks.length)}
+                  color={taskFilter !== 'all' ? 'blue' : 'neutral'}
+                  onClick={() => { setTaskFilter('all'); setTasksOpen(true) }}
+                />
+              </div>
+              {estSeg === false ? (
+                <p className="text-xs text-neutral-500">
+                  {WORK_MODEL_LABEL[signalsRow?.work_model ?? ''] ?? 'This'} is not an estimating
+                  segment — unestimated work is expected here, so these figures are context, not
+                  alarms (§2 “segment or lie”).
+                </p>
+              ) : null}
+            </>
           ) : (
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               <KpiCard
@@ -694,7 +718,7 @@ export function ProjectDetailPage() {
                 label="Unestimated (touched)"
                 value={String(periodMetrics.unestTouched)}
                 sub="no estimate on the task"
-                color={periodMetrics.unestTouched > 0 ? 'amber' : 'emerald'}
+                color={estSeg === false ? 'neutral' : periodMetrics.unestTouched > 0 ? 'amber' : 'emerald'}
                 active={taskFilter === 'unestimated'}
                 onClick={() => toggleFilter('unestimated')}
               />
@@ -789,17 +813,29 @@ export function ProjectDetailPage() {
               </Panel>
               <Panel
                 title="Monthly hours & coverage"
-                blurb="Hours logged per month, split estimated vs unestimated, with hours-weighted coverage — the same vocabulary as the Estimation page."
+                blurb="Task-linked hours per month, split estimated vs unestimated, with hours-weighted coverage — the same vocabulary as the Estimation page."
               >
                 {staticErrors.trend ? (
                   <div className="px-4 py-3 text-sm text-red-700">
                     Could not be loaded — not an idle project. <code className="text-xs">{staticErrors.trend}</code>
                   </div>
                 ) : monthSeries ? (
-                  <ProjectTrendChart
-                    months={monthSeries}
-                    isEstimatingSegment={signalsRow ? signalsRow.work_model === 'fixed_scope' || signalsRow.work_model === 'maintenance' : true}
-                  />
+                  <>
+                    {/* estSeg comes from the coverage view — the §5 flag, never re-derived
+                        here. A project with monthly hours always has a coverage row, so
+                        `?? true` is only ever reached when nothing renders anyway. */}
+                    <ProjectTrendChart months={monthSeries} isEstimatingSegment={estSeg ?? true} />
+                    {(() => {
+                      const taskless = monthSeries.reduce((s, m) => s + m.project_level_hours, 0)
+                      return taskless > 0 ? (
+                        <p className="border-t border-neutral-100 px-3 py-2 text-[11px] leading-snug text-neutral-500">
+                          Plus {formatHours(taskless)} of unattributed project time (logged at
+                          project level, no task) since 2025 — outside every task counter above,
+                          shown so the total reconciles (§5).
+                        </p>
+                      ) : null
+                    })()}
+                  </>
                 ) : (
                   <div className="px-4 py-6 text-sm text-neutral-400">Loading…</div>
                 )}

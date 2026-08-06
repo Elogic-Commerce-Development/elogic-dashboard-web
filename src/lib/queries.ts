@@ -986,12 +986,16 @@ export type ProjectMonthRow = {
   coverage_pct: number | null
   team_members: number
   tasks_touched: number
+  /** §5's "unattributed project time" — task-less hours, excluded from every task counter (D4). */
+  project_level_hours: number
 }
 
 export async function fetchProjectMonthSeries(projectId: number): Promise<ProjectMonthRow[]> {
   const { data, error } = await supabase
     .from('v_metric_project_month')
-    .select('month, total_hours, hours_on_estimated, hours_on_unestimated, coverage_pct, team_members, tasks_touched')
+    .select(
+      'month, total_hours, hours_on_estimated, hours_on_unestimated, coverage_pct, team_members, tasks_touched, project_level_hours',
+    )
     .eq('project_id', projectId)
     .order('month', { ascending: true })
   if (error) throw error
@@ -1003,7 +1007,24 @@ export async function fetchProjectMonthSeries(projectId: number): Promise<Projec
     coverage_pct: r.coverage_pct == null ? null : Number(r.coverage_pct),
     team_members: Number(r.team_members ?? 0),
     tasks_touched: Number(r.tasks_touched ?? 0),
+    project_level_hours: Number(r.project_level_hours ?? 0),
   }))
+}
+
+/**
+ * The canonical `is_estimating_segment` flag for one project — read from the
+ * view rather than re-deriving §5's work-model mapping client-side (the same
+ * rule the index follows). `null` when the project has no coverage row (no
+ * in-scope tasks), in which case no estimation figure renders anyway.
+ */
+export async function fetchProjectEstimatingFlag(projectId: number): Promise<boolean | null> {
+  const { data, error } = await supabase
+    .from('v_metric_coverage_by_project')
+    .select('is_estimating_segment')
+    .eq('project_id', projectId)
+    .maybeSingle()
+  if (error) throw error
+  return data == null ? null : Boolean((data as { is_estimating_segment: boolean }).is_estimating_segment)
 }
 
 /** Created/completed dates for the backlog-flow chart, from the S1 scope base. */

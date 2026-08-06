@@ -31,9 +31,9 @@ src/
 │   ├── supabase.ts              ← singleton supabase client
 │   ├── queries.ts               ← typed fetchers for every view
 │   ├── period.ts                ← THE period model: presets, ranges, groups, URL parsing
-│   ├── periodStats.ts           ← client-side period re-aggregation (project detail only)
 │   ├── estimation.ts            ← §4.2 cuts of the calibration sample + its formatters
 │   ├── radarSignals.ts          ← §4.1 signal sentences · radarPolicy.ts ← display caps
+│   ├── projectPolicy.ts         ← §4.6 display constants (backlog age, bus-factor emphasis)
 │   ├── errors.ts                ← describeError() for PostgREST's plain-object errors
 │   ├── filters.ts               ← Zod schema + defaultFilters + Filters type
 │   ├── FilterContext.ts         ← entity-filter context (projects/users)
@@ -49,6 +49,7 @@ src/
     ├── SyncStatusBadge.tsx      ← reads v_sync_status, colored dot
     ├── DataTable.tsx            ← generic TanStack Table wrapper
     ├── radar/                   ← §4.1 Radar blocks (queue, bleeding-now, vitals)
+    ├── projects/                ← §4.7 detail blocks (signal banner, flow + trend charts)
     └── estimation/              ← §4.2 Estimation blocks
         ├── Section.tsx          ← Block / Panel / StatTile / LoadFailure shells
         ├── CoverageBlock.tsx    ← + CoverageTrendChart.tsx
@@ -142,9 +143,11 @@ npm run lint         # eslint
   `supabase.auth.getSession()` is async; `ready` state prevents the login
   form flashing for already-signed-in users. Don't remove the `ready` gate.
 - **`v_task_actual_vs_estimate` is a legacy (pre-§5) view** — whole company,
-  no date floor, back to 2017. Only `ProjectDetailPage` still reads it. New
-  work reads the canonical `v_metric_*` family; see the parity report for what
-  the two disagree about and why.
+  no date floor, back to 2017. After F6 its only reader is `fetchTaskDetail`'s
+  out-of-scope fallback (plus `v_contributor_task_summary` on person detail —
+  the last legacy period path, still owed a canonical replacement). New work
+  reads the canonical `v_metric_*` family; see the parity report for what the
+  two disagree about and why.
 - **Sign out:** `supabase.auth.signOut()` — the `onAuthStateChange` listener
   in AuthGate handles the re-render automatically.
 - **Recharts 3 Pie sectors:** put the per-slice `fill` on each data item, NOT

@@ -46,11 +46,19 @@ type IndexRow = ProjectIndexRow & {
   signal_count: number | null
 }
 
+type DecorKey = 'team' | 'writeoff' | 'backlog' | 'signals'
 /** Which decoration columns failed to load — their cells are unmeasured, not zero. */
-type FailedColumns = Partial<Record<'team' | 'writeoff' | 'backlog' | 'signals', string>>
+type FailedColumns = Partial<Record<DecorKey, string>>
+/** Which decoration columns are still loading — their cells are pending, not zero. */
+type PendingColumns = Record<DecorKey, boolean>
 
-function makeColumns(periodActive: boolean, failed: FailedColumns): ColumnDef<IndexRow>[] {
+function makeColumns(
+  periodActive: boolean,
+  failed: FailedColumns,
+  pending: PendingColumns,
+): ColumnDef<IndexRow>[] {
   const failCell = <span className="text-red-400" title="Column failed to load — not measured">×</span>
+  const pendingCell = <span className="text-neutral-300" title="Still loading">…</span>
   return [
     {
       accessorKey: 'project_name',
@@ -104,6 +112,7 @@ function makeColumns(periodActive: boolean, failed: FailedColumns): ColumnDef<In
       accessorFn: (r) => r.team?.team_size ?? -1,
       cell: ({ row }) => {
         if (failed.team) return failCell
+        if (pending.team) return pendingCell
         const t = row.original.team
         if (!t || t.team_size === 0) return '—'
         return (
@@ -133,6 +142,7 @@ function makeColumns(periodActive: boolean, failed: FailedColumns): ColumnDef<In
               untagged
             </span>
           )
+        if (pending.writeoff) return pendingCell
         const w = row.original.writeoff
         if (!w || w.pct == null) return '—'
         return (
@@ -148,6 +158,7 @@ function makeColumns(periodActive: boolean, failed: FailedColumns): ColumnDef<In
       accessorFn: (r) => r.backlog?.open_tasks ?? 0,
       cell: ({ row }) => {
         if (failed.backlog) return failCell
+        if (pending.backlog) return pendingCell
         const b = row.original.backlog
         if (!b || b.open_tasks === 0) return <span className="text-neutral-400">0 open</span>
         const zombie = b.open_over_180d > 0 && b.open_over_180d / b.open_tasks >= ZOMBIE_BACKLOG_SHARE
@@ -170,6 +181,7 @@ function makeColumns(periodActive: boolean, failed: FailedColumns): ColumnDef<In
       accessorFn: (r) => r.signal_count ?? 0,
       cell: ({ row }) => {
         if (failed.signals) return failCell
+        if (pending.signals) return pendingCell
         const n = row.original.signal_count ?? 0
         if (n === 0) return <span className="text-neutral-400">—</span>
         return (
@@ -199,6 +211,7 @@ export function ProjectsPage() {
   const [loading, setLoading] = useState(false)
   const [coreError, setCoreError] = useState<string | null>(null)
   const [failed, setFailed] = useState<FailedColumns>({})
+  const [pending, setPending] = useState<PendingColumns>({ team: true, writeoff: true, backlog: true, signals: true })
   const [showCompleted, setShowCompleted] = useState(false)
 
   // Validated against the group, not read raw — a bookmark carrying a preset
@@ -221,41 +234,56 @@ export function ProjectsPage() {
 
   useEffect(() => {
     let cancelled = false
+
+    // The table renders as soon as the core rows land; the four decoration
+    // columns fill in as their fetches settle (the team column pages the whole
+    // contributor grain and must not gate first paint). Until a decoration
+    // resolves its cells show "…", on failure "×" plus a named banner — a
+    // pending or failed column must never read as zeros (F3's lesson).
+    function decorate<T>(key: DecorKey, fetch: Promise<T>, apply: (value: T) => void) {
+      void fetch
+        .then((v) => {
+          if (!cancelled) apply(v)
+        })
+        .catch((e: unknown) => {
+          if (!cancelled) setFailed((f) => ({ ...f, [key]: describeError(e) }))
+        })
+        .finally(() => {
+          if (!cancelled) setPending((p) => ({ ...p, [key]: false }))
+        })
+    }
+
     async function load() {
       setLoading(true)
       setCoreError(null)
       setFailed({})
+      setPending({ team: true, writeoff: true, backlog: true, signals: true })
+      setTeam(null)
+      setWriteoff(null)
+      setBacklog(null)
+      setSignals(null)
 
-      // Core rows plus four independent decorations. A decoration failure must
-      // not blank the table — but it must not read as zeros either (F3's
-      // lesson), so each failure is named in a banner and its cells render ×.
-      const [core, teamRes, woRes, backlogRes, sigRes] = await Promise.allSettled([
-        month ? fetchProjectsIndexForMonth(month, projectIds) : fetchProjectsIndexAllTime(projectIds),
-        month ? fetchProjectTeamForMonth(month, projectIds) : fetchProjectTeamAllTime(projectIds),
-        fetchProjectWriteoffMap(projectIds),
-        fetchProjectBacklogMap(projectIds),
-        fetchFiringSignalCounts(projectIds),
-      ])
-      if (cancelled) return
+      decorate('team', month ? fetchProjectTeamForMonth(month, projectIds) : fetchProjectTeamAllTime(projectIds), setTeam)
+      decorate('writeoff', fetchProjectWriteoffMap(projectIds), setWriteoff)
+      decorate('backlog', fetchProjectBacklogMap(projectIds), setBacklog)
+      decorate('signals', fetchFiringSignalCounts(projectIds), setSignals)
 
-      if (core.status === 'fulfilled') setRows(core.value)
-      else {
-        setRows([])
-        setCoreError(describeError(core.reason))
+      try {
+        const core = await (month
+          ? fetchProjectsIndexForMonth(month, projectIds)
+          : fetchProjectsIndexAllTime(projectIds))
+        if (!cancelled) setRows(core)
+      } catch (e) {
+        if (!cancelled) {
+          setRows([])
+          setCoreError(describeError(e))
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
       }
-      const fails: FailedColumns = {}
-      if (teamRes.status === 'fulfilled') setTeam(teamRes.value)
-      else { setTeam(null); fails.team = describeError(teamRes.reason) }
-      if (woRes.status === 'fulfilled') setWriteoff(woRes.value)
-      else { setWriteoff(null); fails.writeoff = describeError(woRes.reason) }
-      if (backlogRes.status === 'fulfilled') setBacklog(backlogRes.value)
-      else { setBacklog(null); fails.backlog = describeError(backlogRes.reason) }
-      if (sigRes.status === 'fulfilled') setSignals(sigRes.value)
-      else { setSignals(null); fails.signals = describeError(sigRes.reason) }
-      setFailed(fails)
-      setLoading(false)
     }
     void load()
+
     return () => {
       cancelled = true
     }
@@ -280,7 +308,7 @@ export function ProjectsPage() {
   )
   const completedCount = useMemo(() => merged.filter((r) => r.is_completed).length, [merged])
 
-  const columns = useMemo(() => makeColumns(!isAllTime, failed), [isAllTime, failed])
+  const columns = useMemo(() => makeColumns(!isAllTime, failed, pending), [isAllTime, failed, pending])
   const failedNames = Object.keys(failed)
 
   return (
@@ -294,7 +322,8 @@ export function ProjectsPage() {
             home of the T&amp;M / outstaff story: hours, staffing continuity, billability. Hours,
             coverage and team follow the period pill; columns marked “(now)” or “(since 2025)” are
             current-state and do not. Coverage is hours-weighted and applies only to estimating
-            segments.
+            segments. Hours are task-linked; time logged at project level with no task appears on
+            the project's detail page, not here.
           </p>
         </div>
         <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-neutral-600">

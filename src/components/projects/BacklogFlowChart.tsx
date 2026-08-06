@@ -158,9 +158,11 @@ export function BacklogFlowChart({
         </ResponsiveContainer>
       </div>
       {bulkNotes.length > 0 ? (
+        // The day threshold behind "bulk-close" lives in v_metric_config on the
+        // database, so the copy names the phenomenon, not the trigger value.
         <p className="border-t border-neutral-100 px-3 py-2 text-[11px] leading-snug text-neutral-500">
-          Bulk-close events (≥ 20 completions on one project-day, all task vintages — counted apart
-          per §5; the grey stack shows only the in-scope share): {bulkNotes.join(' · ')}.
+          Bulk-close events (mass-close/import days flagged by §5's guard, all task vintages —
+          counted apart; the grey stack shows only the in-scope share): {bulkNotes.join(' · ')}.
         </p>
       ) : null}
     </div>
