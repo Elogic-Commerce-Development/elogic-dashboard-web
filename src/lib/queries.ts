@@ -113,66 +113,6 @@ export type MonthlyTrend = {
   estimate_adoption_rate: number | null
 }
 
-export type DashboardKpiMonth = {
-  month: string
-  total_tasks: number
-  estimated_tasks: number
-  total_hours: number
-  unestimated_tasks_with_time: number
-  unestimated_hours: number
-  overrun_tasks: number
-  overrun_hours: number
-}
-
-export type DashboardAccuracyMonth = {
-  month: string
-  mean_usage: number | null
-  min_usage: number | null
-  max_usage: number | null
-  sample_size: number
-}
-
-export type DashboardQualityMonth = {
-  month: string
-  iter_median: number | null
-  iter_p25: number | null
-  iter_p75: number | null
-  iter_sample_size: number
-  iter_any_capped: boolean
-  bug_median: number | null
-  bug_p25: number | null
-  bug_p75: number | null
-  bug_sample_size: number
-  bug_any_capped: boolean
-}
-
-export type RecentUnestimated = {
-  task_id: number
-  task_name: string
-  project_id: number
-  project_name: string
-  recent_hours: number
-  total_hours: number
-  last_record_date: string
-  source: string | null
-  task_jira_key: string | null
-  project_jira_key: string | null
-}
-
-export type RecentOverrun = {
-  task_id: number
-  task_name: string
-  project_id: number
-  project_name: string
-  estimate_hours: number
-  actual_hours: number
-  ratio: number
-  recent_hours: number
-  last_record_date: string
-  source: string | null
-  task_jira_key: string | null
-  project_jira_key: string | null
-}
 
 export type ProjectListItem = { id: number; name: string; label_id: number | null; is_completed: boolean }
 export type UserListItem = { id: number; display_name: string; class: string | null }
@@ -1146,123 +1086,6 @@ export async function fetchProjectPeriodRows(
     is_bucket: Boolean(r.is_bucket),
     qa_iterations: r.qa_iterations == null ? null : Number(r.qa_iterations),
     qa_bugs: r.qa_bugs == null ? null : Number(r.qa_bugs),
-  }))
-}
-
-/* ── Dashboard overview (server-side aggregation; see v_dashboard_* views) ── */
-
-export async function fetchDashboardKpisMonthly(): Promise<DashboardKpiMonth[]> {
-  const { data, error } = await supabase
-    .from('v_dashboard_kpis_monthly')
-    .select('*')
-    .order('month', { ascending: true })
-  if (error) throw error
-  return (data ?? []) as DashboardKpiMonth[]
-}
-
-export async function fetchDashboardAccuracyMonthly(): Promise<DashboardAccuracyMonth[]> {
-  const { data, error } = await supabase
-    .from('v_dashboard_accuracy_monthly')
-    .select('*')
-    .order('month', { ascending: true })
-  if (error) throw error
-  return (data ?? []) as DashboardAccuracyMonth[]
-}
-
-export async function fetchDashboardQualityMonthly(): Promise<DashboardQualityMonth[]> {
-  const { data, error } = await supabase
-    .from('v_dashboard_quality_monthly')
-    .select('*')
-    .order('month', { ascending: true })
-  if (error) throw error
-  return (data ?? []) as DashboardQualityMonth[]
-}
-
-export async function fetchDashboardTrend(): Promise<MonthlyTrend[]> {
-  const { data, error } = await supabase
-    .from('v_dashboard_trend_monthly')
-    .select('*')
-    .order('month', { ascending: true })
-  if (error) throw error
-  return (data ?? []) as MonthlyTrend[]
-}
-
-/** Trailing-30-day cutoff (UTC date), matching the old client computeShortlists. */
-function thirtyDaysAgoIso(): string {
-  const cutoff = new Date()
-  cutoff.setDate(cutoff.getDate() - 30)
-  return cutoff.toISOString().split('T')[0]
-}
-
-export async function fetchDashboardRecentOverruns(limit = 5): Promise<RecentOverrun[]> {
-  // ratio > 1 ⟺ estimate_hours > 0 AND actual_hours > estimate_hours.
-  const { data, error } = await supabase
-    .from('v_dashboard_tasks')
-    .select(
-      'task_id, task_name, project_id, project_name, estimate_hours, actual_hours, ratio, last_record_date, source, task_jira_key, project_jira_key',
-    )
-    .gt('ratio', 1)
-    .gte('last_record_date', thirtyDaysAgoIso())
-    // actual_hours desc, then created_on/task_id desc as deterministic
-    // tie-breakers — the old client sorted a created_on-desc list with a
-    // stable sort, so ties resolved to the most-recent task. Without these,
-    // PostgREST tie order is arbitrary and the top-5 could differ at a tie.
-    .order('actual_hours', { ascending: false })
-    .order('created_on', { ascending: false })
-    .order('task_id', { ascending: false })
-    .limit(limit)
-  if (error) throw error
-  return ((data ?? []) as Array<{
-    task_id: number; task_name: string; project_id: number; project_name: string
-    estimate_hours: number; actual_hours: number; ratio: number; last_record_date: string
-    source: string | null; task_jira_key: string | null; project_jira_key: string | null
-  }>).map((t) => ({
-    task_id: t.task_id,
-    task_name: t.task_name,
-    project_id: t.project_id,
-    project_name: t.project_name,
-    estimate_hours: Number(t.estimate_hours),
-    actual_hours: Number(t.actual_hours),
-    ratio: Number(t.ratio),
-    recent_hours: Number(t.actual_hours),
-    last_record_date: t.last_record_date,
-    source: t.source,
-    task_jira_key: t.task_jira_key,
-    project_jira_key: t.project_jira_key,
-  }))
-}
-
-export async function fetchDashboardRecentUnestimated(limit = 5): Promise<RecentUnestimated[]> {
-  const { data, error } = await supabase
-    .from('v_dashboard_tasks')
-    .select(
-      'task_id, task_name, project_id, project_name, actual_hours, last_record_date, source, task_jira_key, project_jira_key',
-    )
-    .is('estimate_hours', null)
-    .eq('is_completed', false)
-    .gt('actual_hours', 0)
-    .gte('last_record_date', thirtyDaysAgoIso())
-    // Deterministic tie-breakers — see fetchDashboardRecentOverruns.
-    .order('actual_hours', { ascending: false })
-    .order('created_on', { ascending: false })
-    .order('task_id', { ascending: false })
-    .limit(limit)
-  if (error) throw error
-  return ((data ?? []) as Array<{
-    task_id: number; task_name: string; project_id: number; project_name: string
-    actual_hours: number; last_record_date: string
-    source: string | null; task_jira_key: string | null; project_jira_key: string | null
-  }>).map((t) => ({
-    task_id: t.task_id,
-    task_name: t.task_name,
-    project_id: t.project_id,
-    project_name: t.project_name,
-    recent_hours: Number(t.actual_hours),
-    total_hours: Number(t.actual_hours),
-    last_record_date: t.last_record_date,
-    source: t.source,
-    task_jira_key: t.task_jira_key,
-    project_jira_key: t.project_jira_key,
   }))
 }
 
@@ -2514,5 +2337,366 @@ export async function fetchTrackingDeficits(userId: number): Promise<TrackingDef
     tracked_hours: Number(r.tracked_hours ?? 0),
     deficit_hours: Number(r.deficit_hours ?? 0),
     status: String(r.status ?? ''),
+  }))
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// §4.3 Quality + §4.4 Write-offs — F7
+//
+// Every predicate arrives from a view. The one thing this section computes in
+// the browser is *aggregation* over rows a canonical view already classified
+// (grouping QA-covered completed tasks by their `completed_on` month, bucketing
+// them by `qa_iterations`) — the same thing `fetchCoverageTrend` does, and the
+// opposite of re-deriving a §5 predicate (§2.3).
+//
+// **Load shape.** Timed against prod as role `authenticated`, projecting every
+// column, 2026-08-06 — never `COUNT(*)` as `postgres`, which is the trap that
+// shipped two views over the 8s cap. Measured cold unless noted:
+//
+//   v_metric_writeoff_by_month (new, F7) ....... 0.13s
+//   v_metric_writeoff_by_project ............... 0.12s
+//   v_metric_writeoff_by_segment ............... 0.11s
+//   v_metric_returned_rate_by_project .......... 0.29s
+//   v_scope_tasks, QA population (706 rows) .... 0.08s
+//   v_metric_tasks, is_second_qa_round (22) .... 2.11s  ← staged alone
+//   v_metric_tasks, QA population (706 rows) ... 3.93s cold / 0.47s warm  ← NOT USED
+//
+// **Why the quality task grain reads `v_scope_tasks` and not `v_metric_tasks`.**
+// The last line above is F4's Calibration blocker in miniature: `v_metric_tasks`
+// materialises the whole §5 attribution machinery — a window function over 6,955
+// contributor rows plus a seq scan of 106,202 `time_records` — *before* the
+// filter is applied, so selecting 706 of 4,485 rows costs the same as selecting
+// all of them (EXPLAIN ANALYZE, 2026-08-06). None of that work is quality work.
+//
+// `v_scope_tasks` is the S1 scope layer the §5 family is itself built on, and it
+// carries every column §4.3 needs. Equivalence was **measured, not assumed**,
+// as role `authenticated`:
+//
+//   QA-covered completed  706 = 706      returned (>= 2)  226 = 226
+//   completed            3,171 = 3,171
+//   ladder (tasks / avg actual h / estimated / overrun tasks), all three buckets:
+//     480 / 7.9h / 221 / 74 · 122 / 11.5h / 56 / 27 · 104 / 24.3h / 53 / 36
+//     — byte-identical from both views
+//   `overrun_hours` IS NOT DISTINCT FROM `overrun_realized_hours` on every one
+//     of the 3,171 completed tasks (0 mismatched rows, Δ 0.0000h) — which is
+//     §5 restated: the bucket exclusion belongs to *live* overrun, so on the
+//     completed side the two columns are the same number.
+//
+// The per-project table still reads `v_metric_returned_rate_by_project`
+// directly, so the canonical rollup stays the authority and the page carries
+// both — if they ever disagree, the page is wrong and it will show.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** One row of §4.3's returned-rate + coverage scoreboard. */
+export type ReturnedRateRow = {
+  project_id: number
+  project_name: string
+  source: string | null
+  work_model: string
+  completed_tasks: number
+  qa_covered_tasks: number
+  qa_coverage_pct: number | null
+  returned_tasks: number
+  returned_pct: number | null
+  open_second_qa_round: number
+  avg_hours_iter_1: number | null
+  avg_hours_iter_2: number | null
+  avg_hours_iter_3plus: number | null
+}
+
+/**
+ * §4.3's returned rate, QA coverage scoreboard and per-project rework ladder,
+ * all from the one canonical view built for them (S3/R5a).
+ *
+ * Ordered by QA-covered tasks descending: a scoreboard about coverage should
+ * open with the projects that actually have some, and §4.3's own example
+ * (BUFF, "the internal proof it's doable") is the top row on that order.
+ */
+export async function fetchReturnedRateByProject(): Promise<ReturnedRateRow[]> {
+  const { data, error } = await supabase
+    .from('v_metric_returned_rate_by_project')
+    .select(
+      'project_id, project_name, source, work_model, completed_tasks, qa_covered_tasks, ' +
+        'qa_coverage_pct, returned_tasks, returned_pct, open_second_qa_round, ' +
+        'avg_hours_iter_1, avg_hours_iter_2, avg_hours_iter_3plus',
+    )
+    .order('qa_covered_tasks', { ascending: false })
+    .order('project_id', { ascending: true })
+  if (error) throw error
+  return ((data ?? []) as unknown as Record<string, unknown>[]).map((r) => ({
+    project_id: Number(r.project_id),
+    project_name: String(r.project_name ?? ''),
+    source: (r.source as string | null) ?? null,
+    work_model: String(r.work_model ?? 'unclassified'),
+    completed_tasks: Number(r.completed_tasks ?? 0),
+    qa_covered_tasks: Number(r.qa_covered_tasks ?? 0),
+    qa_coverage_pct: r.qa_coverage_pct == null ? null : Number(r.qa_coverage_pct),
+    returned_tasks: Number(r.returned_tasks ?? 0),
+    returned_pct: r.returned_pct == null ? null : Number(r.returned_pct),
+    open_second_qa_round: Number(r.open_second_qa_round ?? 0),
+    avg_hours_iter_1: r.avg_hours_iter_1 == null ? null : Number(r.avg_hours_iter_1),
+    avg_hours_iter_2: r.avg_hours_iter_2 == null ? null : Number(r.avg_hours_iter_2),
+    avg_hours_iter_3plus: r.avg_hours_iter_3plus == null ? null : Number(r.avg_hours_iter_3plus),
+  }))
+}
+
+/**
+ * One QA-covered completed task. The grain §4.3's portfolio ladder and its
+ * monthly trend are both aggregated from — see the section header for why this
+ * reads `v_scope_tasks` and the measured proof that it matches `v_metric_tasks`
+ * exactly on every figure this page shows.
+ */
+export type QaCompletedTask = {
+  task_id: number
+  project_id: number
+  completed_on: string | null
+  actual_hours: number
+  estimate_hours: number | null
+  is_estimated: boolean
+  overrun_hours: number
+  qa_iterations: number
+  qa_iterations_capped: boolean
+  qa_bugs: number | null
+  qa_bugs_capped: boolean
+}
+
+export async function fetchQaCompletedTasks(): Promise<QaCompletedTask[]> {
+  const rows = await fetchAllPages<Record<string, unknown>>((from, to) =>
+    supabase
+      .from('v_scope_tasks')
+      .select(
+        'task_id, project_id, completed_on, actual_hours, estimate_hours, is_estimated, ' +
+          'overrun_hours, qa_iterations, qa_iterations_capped, qa_bugs, qa_bugs_capped',
+      )
+      .eq('is_completed', true)
+      .not('qa_iterations', 'is', null)
+      .order('task_id', { ascending: true })
+      .range(from, to),
+  )
+  return rows.map((r) => ({
+    task_id: Number(r.task_id),
+    project_id: Number(r.project_id),
+    completed_on: (r.completed_on as string | null) ?? null,
+    actual_hours: Number(r.actual_hours ?? 0),
+    estimate_hours: r.estimate_hours == null ? null : Number(r.estimate_hours),
+    is_estimated: Boolean(r.is_estimated),
+    overrun_hours: Number(r.overrun_hours ?? 0),
+    qa_iterations: Number(r.qa_iterations ?? 0),
+    qa_iterations_capped: Boolean(r.qa_iterations_capped),
+    qa_bugs: r.qa_bugs == null ? null : Number(r.qa_bugs),
+    qa_bugs_capped: Boolean(r.qa_bugs_capped),
+  }))
+}
+
+/**
+ * The coverage denominator: every completed in-scope task, month and iteration
+ * count only.
+ *
+ * §5 requires the returned rate to be shown with its coverage %, and coverage
+ * needs the *completed* population, not just the labelled subset. Projecting
+ * two columns instead of eleven is what makes this affordable — measured on
+ * prod as role `authenticated`, the same 3,171-row filter costs **2.31s at 11
+ * columns and 0.26s at 2**, so on this view width dominates row count. Kept as
+ * a separate narrow read rather than widening `fetchQaCompletedTasks`.
+ */
+export type CompletedTaskCoverage = {
+  completed_on: string | null
+  qa_iterations: number | null
+}
+
+export async function fetchCompletedTaskCoverage(): Promise<CompletedTaskCoverage[]> {
+  const rows = await fetchAllPages<Record<string, unknown>>((from, to) =>
+    supabase
+      .from('v_scope_tasks')
+      .select('completed_on, qa_iterations')
+      .eq('is_completed', true)
+      .order('task_id', { ascending: true })
+      .range(from, to),
+  )
+  return rows.map((r) => ({
+    completed_on: (r.completed_on as string | null) ?? null,
+    qa_iterations: r.qa_iterations == null ? null : Number(r.qa_iterations),
+  }))
+}
+
+/** §4.3's live alarms: an open task already on its 2nd+ QA round. */
+export type SecondRoundTask = {
+  task_id: number
+  project_id: number
+  project_name: string
+  task_name: string
+  source: string | null
+  task_jira_key: string | null
+  project_jira_key: string | null
+  qa_iterations: number
+  qa_iterations_capped: boolean
+  qa_bugs: number | null
+  actual_hours: number
+  estimate_hours: number | null
+  last_time_on: string | null
+  days_since_time: number | null
+}
+
+/**
+ * The one `v_metric_tasks` read on /quality (2.11s — staged in its own wave).
+ * It has to be this view: `is_second_qa_round` is a §5/§4.1 predicate
+ * (`NOT is_completed AND COALESCE(qa_iterations, 0) >= 2`) and re-deriving it
+ * from the scope layer in the browser is exactly what §2.3 forbids, however
+ * cheap it would be.
+ */
+export async function fetchSecondRoundTasks(): Promise<SecondRoundTask[]> {
+  const { data, error } = await supabase
+    .from('v_metric_tasks')
+    .select(
+      'task_id, project_id, project_name, task_name, source, task_jira_key, project_jira_key, ' +
+        'qa_iterations, qa_iterations_capped, qa_bugs, actual_hours, estimate_hours, ' +
+        'last_time_on, days_since_time',
+    )
+    .eq('is_second_qa_round', true)
+    .order('qa_iterations', { ascending: false })
+    .order('actual_hours', { ascending: false })
+    .order('task_id', { ascending: true })
+  if (error) throw error
+  return ((data ?? []) as unknown as Record<string, unknown>[]).map((r) => ({
+    task_id: Number(r.task_id),
+    project_id: Number(r.project_id),
+    project_name: String(r.project_name ?? ''),
+    task_name: String(r.task_name ?? ''),
+    source: (r.source as string | null) ?? null,
+    task_jira_key: (r.task_jira_key as string | null) ?? null,
+    project_jira_key: (r.project_jira_key as string | null) ?? null,
+    qa_iterations: Number(r.qa_iterations ?? 0),
+    qa_iterations_capped: Boolean(r.qa_iterations_capped),
+    qa_bugs: r.qa_bugs == null ? null : Number(r.qa_bugs),
+    actual_hours: Number(r.actual_hours ?? 0),
+    estimate_hours: r.estimate_hours == null ? null : Number(r.estimate_hours),
+    last_time_on: (r.last_time_on as string | null) ?? null,
+    days_since_time: r.days_since_time == null ? null : Number(r.days_since_time),
+  }))
+}
+
+// ── §4.4 Write-offs ────────────────────────────────────────────────────────
+
+/**
+ * One (month, scope) row of §5 Write-off %.
+ *
+ * Two rows per month — in-scope and out — so a month's *company* figure is
+ * `Σ non_billable / Σ (billable + non_billable)` across both, never the mean of
+ * the two percentages (a 300h scope would then weigh the same as a 9,000h one).
+ * `foldWriteoffMonths()` in `lib/writeoffs.ts` does that fold exactly once, so
+ * no caller gets the chance to get it wrong a second time.
+ */
+export type WriteoffMonthRow = {
+  month: string
+  is_in_scope: boolean
+  non_billable_hours: number
+  billable_hours: number
+  untagged_hours: number
+  total_hours: number
+  writeoff_pct: number | null
+}
+
+export async function fetchWriteoffByMonth(): Promise<WriteoffMonthRow[]> {
+  const { data, error } = await supabase
+    .from('v_metric_writeoff_by_month')
+    .select(
+      'month, is_in_scope, non_billable_hours, billable_hours, untagged_hours, total_hours, writeoff_pct',
+    )
+    .order('month', { ascending: true })
+    .order('is_in_scope', { ascending: true })
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    month: String(r.month).slice(0, 10),
+    is_in_scope: Boolean(r.is_in_scope),
+    non_billable_hours: Number(r.non_billable_hours ?? 0),
+    billable_hours: Number(r.billable_hours ?? 0),
+    untagged_hours: Number(r.untagged_hours ?? 0),
+    total_hours: Number(r.total_hours ?? 0),
+    writeoff_pct: r.writeoff_pct == null ? null : Number(r.writeoff_pct),
+  }))
+}
+
+/**
+ * §4.4's ledger. Company-wide by design — the pinned 8.8% is a company number
+ * that splits ~19.7% in-scope / ~5.3% out, and hiding the out-of-scope side
+ * would hide where most of the non-billable hours actually are (BA activities,
+ * Pre-sales, internal PM).
+ *
+ * `writeoff_flagged` is the view's own boolean off `v_metric_config`
+ * (> 15%); the page renders it and never recomputes the comparison.
+ *
+ * Distinct from F6's `fetchProjectWriteoffMap`, which hard-filters to in-scope
+ * and projects 3 of the 12 columns for a lookup map on the Projects index.
+ */
+export type WriteoffProjectRow = {
+  project_id: number
+  project_name: string
+  source: string | null
+  work_model: string
+  rate_band: string | null
+  is_in_scope: boolean
+  non_billable_hours: number
+  billable_hours: number
+  untagged_hours: number
+  total_hours: number
+  writeoff_pct: number | null
+  writeoff_flagged: boolean | null
+}
+
+export async function fetchWriteoffByProject(): Promise<WriteoffProjectRow[]> {
+  const { data, error } = await supabase
+    .from('v_metric_writeoff_by_project')
+    .select(
+      'project_id, project_name, source, work_model, rate_band, is_in_scope, ' +
+        'non_billable_hours, billable_hours, untagged_hours, total_hours, ' +
+        'writeoff_pct, writeoff_flagged',
+    )
+    .order('non_billable_hours', { ascending: false })
+    .order('project_id', { ascending: true })
+  if (error) throw error
+  return ((data ?? []) as unknown as Record<string, unknown>[]).map((r) => ({
+    project_id: Number(r.project_id),
+    project_name: String(r.project_name ?? ''),
+    source: (r.source as string | null) ?? null,
+    work_model: String(r.work_model ?? 'unclassified'),
+    rate_band: (r.rate_band as string | null) ?? null,
+    is_in_scope: Boolean(r.is_in_scope),
+    non_billable_hours: Number(r.non_billable_hours ?? 0),
+    billable_hours: Number(r.billable_hours ?? 0),
+    untagged_hours: Number(r.untagged_hours ?? 0),
+    total_hours: Number(r.total_hours ?? 0),
+    writeoff_pct: r.writeoff_pct == null ? null : Number(r.writeoff_pct),
+    writeoff_flagged: r.writeoff_flagged == null ? null : Boolean(r.writeoff_flagged),
+  }))
+}
+
+/** §4.4 / §2's "segment or lie": write-off by work model × in/out of scope. */
+export type WriteoffSegmentRow = {
+  work_model: string
+  is_in_scope: boolean
+  non_billable_hours: number
+  billable_hours: number
+  untagged_hours: number
+  total_hours: number
+  writeoff_pct: number | null
+}
+
+export async function fetchWriteoffBySegment(): Promise<WriteoffSegmentRow[]> {
+  const { data, error } = await supabase
+    .from('v_metric_writeoff_by_segment')
+    .select(
+      'work_model, is_in_scope, non_billable_hours, billable_hours, untagged_hours, total_hours, writeoff_pct',
+    )
+    .order('is_in_scope', { ascending: false })
+    .order('non_billable_hours', { ascending: false })
+  if (error) throw error
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    work_model: String(r.work_model ?? 'unclassified'),
+    is_in_scope: Boolean(r.is_in_scope),
+    non_billable_hours: Number(r.non_billable_hours ?? 0),
+    billable_hours: Number(r.billable_hours ?? 0),
+    untagged_hours: Number(r.untagged_hours ?? 0),
+    total_hours: Number(r.total_hours ?? 0),
+    writeoff_pct: r.writeoff_pct == null ? null : Number(r.writeoff_pct),
   }))
 }
