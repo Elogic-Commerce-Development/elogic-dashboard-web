@@ -91,10 +91,19 @@ export const PERIOD_GROUPS = {
     secondary: ['previous_month', 'current_year', 'previous_year', 'custom'],
     default: 'current_month',
   },
-  /** Project detail — the person set plus `all_time`. */
+  /**
+   * Project detail — month-aligned presets only (F6).
+   *
+   * The page's period mode reads S7's `v_metric_task_contributor_month`, whose
+   * grain is (task, person, calendar month): hours sum exactly over any month
+   * range and task counts stay exact via client-side DISTINCT, but a week or an
+   * arbitrary custom range would need day-grain data no canonical view carries.
+   * Same trade F2 made for the grids — a preset the data cannot answer exactly
+   * is not offered. Weeks/custom can return with a task × day view.
+   */
   project: {
-    primary: ['current_week', 'last_week', 'current_month'],
-    secondary: ['previous_month', 'current_year', 'previous_year', 'all_time', 'custom'],
+    primary: ['current_month', 'previous_month', 'all_time'],
+    secondary: ['current_year', 'previous_year'],
     default: 'current_month',
   },
   /**
