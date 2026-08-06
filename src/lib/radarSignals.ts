@@ -1,4 +1,4 @@
-import type { RadarQueueRow } from '@/lib/queries'
+import type { ProjectSignals } from '@/lib/queries'
 import { formatHours } from '@/lib/format'
 
 /**
@@ -31,10 +31,12 @@ export type FiringSignal = {
 const plural = (n: number, one: string, many = `${one}s`) => (n === 1 ? one : many)
 
 /**
- * Signals for one queue row, ordered by the hours each contributed — so the
- * first sentence a reader sees is the one doing most of the ranking.
+ * Signals for one project's signals row, ordered by the hours each contributed
+ * — so the first sentence a reader sees is the one doing most of the ranking.
+ * (Radar's queue rows extend `ProjectSignals`, and F6's project-detail banner
+ * passes the bare signals row — same sentences on both pages by construction.)
  */
-export function firingSignals(r: RadarQueueRow): FiringSignal[] {
+export function firingSignals(r: ProjectSignals): FiringSignal[] {
   const out: FiringSignal[] = []
 
   if (r.sig_live_overrun) {

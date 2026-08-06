@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { BACKLOG_OLD_DAYS } from './projectPolicy'
 
 /**
  * AC user `class` values we analyse on the People grid + Users filter.
@@ -207,30 +208,6 @@ export type EmployeeDay = {
   leave_unit: 'days' | 'hours' | null
   expected_hours: number                    // after weekend/holiday/leave reductions
   tracked_hours: number
-}
-
-export async function fetchAllTasksFiltered(projectIds: number[], userIds: number[]): Promise<TaskActualVsEstimate[]> {
-  // PostgREST caps each response at 1000 rows by default. The outsourcing
-  // scope can exceed that, so walk pages until we get a short page.
-  const PAGE = 1000
-  const all: TaskActualVsEstimate[] = []
-  let offset = 0
-  while (true) {
-    let q = supabase
-      .from('v_task_actual_vs_estimate')
-      .select('*')
-      .order('created_on', { ascending: false })
-      .range(offset, offset + PAGE - 1)
-    if (projectIds.length > 0) q = q.in('project_id', projectIds)
-    if (userIds.length > 0) q = q.in('assignee_id', userIds)
-    const { data, error } = await q
-    if (error) throw error
-    const rows = (data ?? []) as TaskActualVsEstimate[]
-    all.push(...rows)
-    if (rows.length < PAGE) break
-    offset += PAGE
-  }
-  return all
 }
 
 export async function fetchSyncStatus(): Promise<SyncStatusRow | null> {
@@ -626,167 +603,528 @@ export async function fetchTaskContributors(
   }))
 }
 
-/* ── Canonical §5 metric layer (F2) ─────────────────────────────────────────
+/* ── Canonical §5 metric layer ──────────────────────────────────────────────
  *
- * The People and Projects grids read the `v_metric_*` family — the one SQL
- * definition per metric that session S3/R5 shipped — instead of the legacy
- * all-time `v_contributor_stats` / `v_project_stats` (whole company, back to
- * 2017, no scope filter) and the client-side `periodStats.ts` re-aggregation.
+ * Everything below reads the `v_metric_*` family — one SQL definition per
+ * metric (S3/R5) — never the legacy all-time views (whole company, back to
+ * 2017, no scope filter). Grain rules inherited from F2:
  *
- * Two sources, one row shape:
+ *   all time        the aggregate views carry no date filter
+ *   one month       R8's v_metric_{person,project}_month
+ *   month ranges    S7's v_metric_task_contributor_month — hours sum exactly
+ *                   (its `hours` column is deliberately unrounded) and task
+ *                   counts stay exact via client-side DISTINCT task_id
  *
- *   all time     v_metric_coverage_by_{person,project} + v_metric_overrun_by_*
- *   one month    v_metric_{person,project}_month  (R8)
- *
- * Only those two. The month views are grained per (grain, month), so their
- * task counters are distinct *within a month* — summing several months
- * double-counts any task worked in more than one (measured +30% person /
- * +56% project across the full range), and the all-time views carry no date
- * filter. A range that is neither "all" nor "exactly one month" therefore has
- * no exact canonical source, which is why `PERIOD_GROUPS.grid` offers only
- * these three presets. See docs/progress-log.md, F2.
- *
- * The two overrun columns differ in basis between the sources, deliberately
- * and visibly (the grids re-label the header):
- *   - all time  §5 attribution — the overrun *amount* (actual − estimate)
- *               charged to whoever holds ≥40% of a task's hours;
- *   - month     contribution — the grain's own hours on tasks that overran.
- * Both are canonical; they answer different questions. Neither is a sum of
- * the other, so they are never mixed inside one column.
+ * Anything finer than a calendar month has no canonical source, which is why
+ * the grid and project period groups offer only month-aligned presets.
  */
-
-/** Shared row shape for both grids' two sources. */
-type MetricGridRow = {
-  hours: number
-  tasks: number
-  estimated_tasks: number
-  coverage_pct: number | null
-  overrun_tasks: number
-  overrun_hours: number
-}
-
-export type ProjectMetricRow = MetricGridRow & {
-  project_id: number
-  project_name: string
-  source: string | null
-  is_completed: boolean
-}
 
 /** `2026-08-01` for the calendar month a period's start date falls in. */
 export function monthKey(from: string): string {
   return `${from.slice(0, 7)}-01`
 }
 
-type CoverageByProject = {
+/* ── Projects index (F6, §4.6) ────────────────────────────────────────────────
+ *
+ * One row per in-scope project carrying 2025+ tasks (28 today, not 65 — the
+ * rest hold no in-scope tasks; see the progress log's F2 open question).
+ * Two kinds of column, labeled apart on the page:
+ *
+ *   period-scoped   hours, coverage, team size + top-contributor share —
+ *                   all-time from v_metric_coverage_by_project +
+ *                   v_metric_task_contributors, one month from R8/S7.
+ *   current-state   write-off % (record grain since 2025, AC only), firing
+ *                   Radar signals, open-backlog hygiene — the same regardless
+ *                   of the period pill, because the underlying metric owns its
+ *                   own window.
+ *
+ * The §4.6 slim also *dropped* the task/estimated/overrun-count columns; the
+ * overrun economics live on Estimation and per project on the detail page.
+ */
+
+export type ProjectIndexRow = {
   project_id: number
   project_name: string
   source: string | null
-  tasks: number
-  estimated_tasks: number
+  work_model: string
+  rate_band: string | null
+  is_estimating_segment: boolean
+  is_completed: boolean
+  /** Task-linked hours for the selected grain (all time | one month). */
   hours: number
-  estimated_hours: number
-}
-type OverrunByProject = {
-  project_id: number
-  realized_overrun_tasks: number
-  live_overrun_tasks: number
-  gross_overrun_hours: number
+  /** Hours-weighted estimate coverage for the grain; gate display on `is_estimating_segment`. */
+  coverage_pct: number | null
 }
 
-export async function fetchProjectMetricsAllTime(projectIds: number[]): Promise<ProjectMetricRow[]> {
+/** Bus factor for the grain: contributor count and the top contributor's share of hours. */
+export type ProjectTeamStat = { team_size: number; top_share_pct: number | null }
+
+export async function fetchProjectsIndexAllTime(projectIds: number[]): Promise<ProjectIndexRow[]> {
   let covQ = supabase
     .from('v_metric_coverage_by_project')
-    .select('project_id, project_name, source, tasks, estimated_tasks, hours, estimated_hours')
+    .select('project_id, project_name, source, work_model, rate_band, is_estimating_segment, hours, coverage_pct')
   if (projectIds.length > 0) covQ = covQ.in('project_id', projectIds)
 
-  let ovrQ = supabase
-    .from('v_metric_overrun_by_project')
-    .select('project_id, realized_overrun_tasks, live_overrun_tasks, gross_overrun_hours')
-  if (projectIds.length > 0) ovrQ = ovrQ.in('project_id', projectIds)
-
-  const [cov, ovr, completed] = await Promise.all([covQ, ovrQ, fetchProjectCompletedMap()])
+  const [cov, completed] = await Promise.all([covQ, fetchProjectCompletedMap()])
   if (cov.error) throw cov.error
-  if (ovr.error) throw ovr.error
 
-  const overrun = new Map(
-    ((ovr.data ?? []) as OverrunByProject[]).map((o) => [o.project_id, o]),
-  )
-
-  const byProject = new Map<number, CoverageByProject>()
-  for (const r of (cov.data ?? []) as CoverageByProject[]) {
-    const acc = byProject.get(r.project_id)
-    if (acc) {
-      acc.tasks = Number(acc.tasks) + Number(r.tasks)
-      acc.estimated_tasks = Number(acc.estimated_tasks) + Number(r.estimated_tasks)
-      acc.hours = Number(acc.hours) + Number(r.hours)
-      acc.estimated_hours = Number(acc.estimated_hours) + Number(r.estimated_hours)
-    } else {
-      byProject.set(r.project_id, { ...r })
-    }
-  }
-
-  const rows: ProjectMetricRow[] = []
-  for (const [project_id, a] of byProject.entries()) {
-    const o = overrun.get(project_id)
-    const hours = Number(a.hours)
-    rows.push({
-      project_id,
-      project_name: a.project_name,
-      source: a.source,
-      hours,
-      tasks: Number(a.tasks),
-      estimated_tasks: Number(a.estimated_tasks),
-      coverage_pct: hours > 0 ? (Number(a.estimated_hours) / hours) * 100 : null,
-      overrun_tasks: Number(o?.realized_overrun_tasks ?? 0) + Number(o?.live_overrun_tasks ?? 0),
-      overrun_hours: Number(o?.gross_overrun_hours ?? 0),
-      is_completed: completed.get(project_id) ?? false,
-    })
-  }
-  return rows.sort((a, b) => b.hours - a.hours)
+  return ((cov.data ?? []) as Array<{
+    project_id: number; project_name: string; source: string | null; work_model: string
+    rate_band: string | null; is_estimating_segment: boolean; hours: number; coverage_pct: number | null
+  }>)
+    .map((r) => ({
+      project_id: r.project_id,
+      project_name: r.project_name,
+      source: r.source,
+      work_model: String(r.work_model ?? 'unclassified'),
+      rate_band: r.rate_band,
+      is_estimating_segment: Boolean(r.is_estimating_segment),
+      is_completed: completed.get(r.project_id) ?? false,
+      hours: Number(r.hours),
+      coverage_pct: r.coverage_pct == null ? null : Number(r.coverage_pct),
+    }))
+    .sort((a, b) => b.hours - a.hours)
 }
 
-type ProjectMonth = {
-  project_id: number
-  project_name: string
-  source: string | null
-  project_is_completed: boolean
-  total_hours: number
-  tasks_touched: number
-  estimated_tasks: number
-  coverage_pct: number | null
-  realized_overrun_tasks_touched: number
-  hours_on_realized_overrun: number
-  live_overrun_tasks_touched: number
-  hours_on_live_overrun: number
-}
-
-export async function fetchProjectMetricsForMonth(
+export async function fetchProjectsIndexForMonth(
   month: string,
   projectIds: number[],
-): Promise<ProjectMetricRow[]> {
+): Promise<ProjectIndexRow[]> {
   let q = supabase
     .from('v_metric_project_month')
-    .select(
-      'project_id, project_name, source, project_is_completed, total_hours, tasks_touched, estimated_tasks, coverage_pct, realized_overrun_tasks_touched, hours_on_realized_overrun, live_overrun_tasks_touched, hours_on_live_overrun',
-    )
+    .select('project_id, project_name, source, work_model, rate_band, project_is_completed, total_hours, coverage_pct')
     .eq('month', month)
     .order('total_hours', { ascending: false })
   if (projectIds.length > 0) q = q.in('project_id', projectIds)
-  const { data, error } = await q
-  if (error) throw error
 
-  return ((data ?? []) as ProjectMonth[]).map((r) => ({
+  // The month view carries no `is_estimating_segment`; read the flag from the
+  // coverage view rather than re-deriving §5's work-model mapping client-side.
+  let segQ = supabase.from('v_metric_coverage_by_project').select('project_id, is_estimating_segment')
+  if (projectIds.length > 0) segQ = segQ.in('project_id', projectIds)
+
+  const [res, seg] = await Promise.all([q, segQ])
+  if (res.error) throw res.error
+  if (seg.error) throw seg.error
+  const estSeg = new Map(
+    ((seg.data ?? []) as Array<{ project_id: number; is_estimating_segment: boolean }>).map((r) => [
+      r.project_id,
+      Boolean(r.is_estimating_segment),
+    ]),
+  )
+
+  return ((res.data ?? []) as Array<{
+    project_id: number; project_name: string; source: string | null; work_model: string | null
+    rate_band: string | null; project_is_completed: boolean; total_hours: number; coverage_pct: number | null
+  }>).map((r) => ({
     project_id: r.project_id,
     project_name: r.project_name,
     source: r.source,
-    hours: Number(r.total_hours),
-    tasks: Number(r.tasks_touched),
-    estimated_tasks: Number(r.estimated_tasks),
-    coverage_pct: r.coverage_pct == null ? null : Number(r.coverage_pct),
-    overrun_tasks:
-      Number(r.realized_overrun_tasks_touched) + Number(r.live_overrun_tasks_touched),
-    overrun_hours: Number(r.hours_on_realized_overrun) + Number(r.hours_on_live_overrun),
+    work_model: String(r.work_model ?? 'unclassified'),
+    rate_band: r.rate_band,
+    is_estimating_segment: estSeg.get(r.project_id) ?? false,
     is_completed: Boolean(r.project_is_completed),
+    hours: Number(r.total_hours),
+    coverage_pct: r.coverage_pct == null ? null : Number(r.coverage_pct),
+  }))
+}
+
+/** Write-off % per project — record grain since 2025, AC only (§4.4). Jira renders "untagged", never 0%. */
+export async function fetchProjectWriteoffMap(
+  projectIds: number[],
+): Promise<Map<number, { pct: number | null; flagged: boolean }>> {
+  let q = supabase
+    .from('v_metric_writeoff_by_project')
+    .select('project_id, writeoff_pct, writeoff_flagged')
+    .eq('is_in_scope', true)
+  if (projectIds.length > 0) q = q.in('project_id', projectIds)
+  const { data, error } = await q
+  if (error) throw error
+  return new Map(
+    ((data ?? []) as Array<{ project_id: number; writeoff_pct: number | null; writeoff_flagged: boolean | null }>).map(
+      (r) => [r.project_id, { pct: r.writeoff_pct == null ? null : Number(r.writeoff_pct), flagged: Boolean(r.writeoff_flagged) }],
+    ),
+  )
+}
+
+/** Firing-signal count per project, from the same view Radar ranks with. Display only — never a sort default (§4.1). */
+export async function fetchFiringSignalCounts(projectIds: number[]): Promise<Map<number, number>> {
+  let q = supabase.from('v_metric_exposure').select('project_id, firing_signal_count')
+  if (projectIds.length > 0) q = q.in('project_id', projectIds)
+  const { data, error } = await q
+  if (error) throw error
+  return new Map(
+    ((data ?? []) as Array<{ project_id: number; firing_signal_count: number }>).map((r) => [
+      r.project_id,
+      Number(r.firing_signal_count),
+    ]),
+  )
+}
+
+/** §4.6's zombie-backlog signal: open tasks now, how many are old, and the age median. */
+export type ProjectBacklogStat = { open_tasks: number; open_over_180d: number; age_p50_days: number | null }
+
+export async function fetchProjectBacklogMap(projectIds: number[]): Promise<Map<number, ProjectBacklogStat>> {
+  const rows = await fetchAllPages<{ project_id: number; created_on: string }>((from, to) => {
+    let q = supabase
+      .from('v_scope_tasks')
+      .select('project_id, created_on')
+      .eq('is_completed', false)
+      .order('project_id', { ascending: true })
+      .order('task_id', { ascending: true })
+      .range(from, to)
+    if (projectIds.length > 0) q = q.in('project_id', projectIds)
+    return q
+  })
+
+  const now = Date.now()
+  const ages = new Map<number, number[]>()
+  for (const r of rows) {
+    const ageDays = (now - new Date(r.created_on).getTime()) / 86_400_000
+    const list = ages.get(r.project_id)
+    if (list) list.push(ageDays)
+    else ages.set(r.project_id, [ageDays])
+  }
+
+  const out = new Map<number, ProjectBacklogStat>()
+  for (const [pid, list] of ages) {
+    list.sort((a, b) => a - b)
+    out.set(pid, {
+      open_tasks: list.length,
+      open_over_180d: list.filter((a) => a > BACKLOG_OLD_DAYS).length,
+      age_p50_days: Math.round(percentile(list, 0.5)),
+    })
+  }
+  return out
+}
+
+/** Linear-interpolated percentile over a sorted ascending list (matches SQL `percentile_cont`). */
+function percentile(sortedAsc: number[], p: number): number {
+  if (sortedAsc.length === 0) return NaN
+  const idx = (sortedAsc.length - 1) * p
+  const lo = Math.floor(idx)
+  const hi = Math.ceil(idx)
+  if (lo === hi) return sortedAsc[lo]
+  return sortedAsc[lo] + (sortedAsc[hi] - sortedAsc[lo]) * (idx - lo)
+}
+
+/** All-time bus factor per project, from the canonical contributor grain (R6-merged people). */
+export async function fetchProjectTeamAllTime(projectIds: number[]): Promise<Map<number, ProjectTeamStat>> {
+  const rows = await fetchAllPages<{ project_id: number; user_id: number; hours: number }>((from, to) => {
+    let q = supabase
+      .from('v_metric_task_contributors')
+      .select('project_id, user_id, hours')
+      .order('project_id', { ascending: true })
+      .order('task_id', { ascending: true })
+      .order('user_id', { ascending: true })
+      .range(from, to)
+    if (projectIds.length > 0) q = q.in('project_id', projectIds)
+    return q
+  })
+  return teamStatsFromContribRows(rows)
+}
+
+/** One-month bus factor per project, from S7's (task, person, month) grain. */
+export async function fetchProjectTeamForMonth(
+  month: string,
+  projectIds: number[],
+): Promise<Map<number, ProjectTeamStat>> {
+  const rows = await fetchAllPages<{ project_id: number; user_id: number; hours: number }>((from, to) => {
+    let q = supabase
+      .from('v_metric_task_contributor_month')
+      .select('project_id, user_id, hours')
+      .eq('month', month)
+      .order('project_id', { ascending: true })
+      .order('task_id', { ascending: true })
+      .order('user_id', { ascending: true })
+      .range(from, to)
+    if (projectIds.length > 0) q = q.in('project_id', projectIds)
+    return q
+  })
+  return teamStatsFromContribRows(rows)
+}
+
+function teamStatsFromContribRows(
+  rows: Array<{ project_id: number; user_id: number; hours: number }>,
+): Map<number, ProjectTeamStat> {
+  const perProject = new Map<number, Map<number, number>>()
+  for (const r of rows) {
+    let people = perProject.get(r.project_id)
+    if (!people) {
+      people = new Map()
+      perProject.set(r.project_id, people)
+    }
+    people.set(r.user_id, (people.get(r.user_id) ?? 0) + Number(r.hours))
+  }
+  const out = new Map<number, ProjectTeamStat>()
+  for (const [pid, people] of perProject) {
+    let total = 0
+    let top = 0
+    for (const h of people.values()) {
+      total += h
+      if (h > top) top = h
+    }
+    out.set(pid, {
+      team_size: people.size,
+      top_share_pct: total > 0 ? (top / total) * 100 : null,
+    })
+  }
+  return out
+}
+
+/* ── Project detail (F6, §4.7) ────────────────────────────────────────────────
+ *
+ * The detail page's data paths, migrated off the legacy views (this was the
+ * project half of F2's detail seam, folded into F6):
+ *
+ *   all time      v_metric_tasks + v_metric_task_contributors, per project —
+ *                 every §5 predicate arrives as a view boolean; the page only
+ *                 counts and sums, it never re-derives one.
+ *   month range   S7's v_metric_task_contributor_month per project.
+ *   history       v_metric_project_month (monthly hours/coverage/team),
+ *                 v_scope_tasks (created/completed flow), v_bulk_close_days
+ *                 (§5 flow-trend exclusion, annotated on the chart),
+ *                 v_metric_project_signals (firing banner + runway + write-off).
+ */
+
+/** One in-scope task on the detail page — a per-project slice of `v_metric_tasks`. */
+export type ProjectTaskRow = {
+  task_id: number
+  task_name: string
+  assignee_id: number | null
+  source: string | null
+  task_jira_key: string | null
+  created_on: string
+  completed_on: string | null
+  is_completed: boolean
+  estimate_hours: number | null
+  actual_hours: number
+  is_estimated: boolean
+  overrun_hours: number
+  ratio: number | null
+  qa_iterations: number | null
+  qa_bugs: number | null
+  is_bucket: boolean
+  is_live_overrun: boolean
+  overrun_live_hours: number
+  overrun_realized_hours: number
+  is_approaching: boolean
+  is_stuck: boolean
+}
+
+const PROJECT_TASK_COLUMNS =
+  'task_id, task_name, assignee_id, source, task_jira_key, created_on, completed_on, is_completed, ' +
+  'estimate_hours, actual_hours, is_estimated, overrun_hours, ratio, qa_iterations, qa_bugs, ' +
+  'is_bucket, is_live_overrun, overrun_live_hours, overrun_realized_hours, is_approaching, is_stuck'
+
+export async function fetchProjectTasks(projectId: number): Promise<ProjectTaskRow[]> {
+  const rows = await fetchAllPages<Record<string, unknown>>((from, to) =>
+    supabase
+      .from('v_metric_tasks')
+      .select(PROJECT_TASK_COLUMNS)
+      .eq('project_id', projectId)
+      .order('created_on', { ascending: false })
+      .order('task_id', { ascending: true })
+      .range(from, to),
+  )
+  return rows.map((t) => ({
+    task_id: Number(t.task_id),
+    task_name: String(t.task_name ?? ''),
+    assignee_id: t.assignee_id == null ? null : Number(t.assignee_id),
+    source: (t.source as string | null) ?? null,
+    task_jira_key: (t.task_jira_key as string | null) ?? null,
+    created_on: String(t.created_on),
+    completed_on: (t.completed_on as string | null) ?? null,
+    is_completed: Boolean(t.is_completed),
+    estimate_hours: t.estimate_hours == null ? null : Number(t.estimate_hours),
+    actual_hours: Number(t.actual_hours ?? 0),
+    is_estimated: Boolean(t.is_estimated),
+    overrun_hours: Number(t.overrun_hours ?? 0),
+    ratio: t.ratio == null ? null : Number(t.ratio),
+    qa_iterations: t.qa_iterations == null ? null : Number(t.qa_iterations),
+    qa_bugs: t.qa_bugs == null ? null : Number(t.qa_bugs),
+    is_bucket: Boolean(t.is_bucket),
+    is_live_overrun: Boolean(t.is_live_overrun),
+    overrun_live_hours: Number(t.overrun_live_hours ?? 0),
+    overrun_realized_hours: Number(t.overrun_realized_hours ?? 0),
+    is_approaching: Boolean(t.is_approaching),
+    is_stuck: Boolean(t.is_stuck),
+  }))
+}
+
+/** One (person, task) contribution — the canonical (R6-merged) contributor grain. */
+export type ProjectContribRow = {
+  user_id: number
+  display_name: string
+  task_id: number
+  hours: number
+}
+
+export async function fetchProjectContribRows(projectId: number): Promise<ProjectContribRow[]> {
+  const rows = await fetchAllPages<Record<string, unknown>>((from, to) =>
+    supabase
+      .from('v_metric_task_contributors')
+      .select('user_id, display_name, task_id, hours')
+      .eq('project_id', projectId)
+      .order('task_id', { ascending: true })
+      .order('user_id', { ascending: true })
+      .range(from, to),
+  )
+  return rows.map((r) => ({
+    user_id: Number(r.user_id),
+    display_name: String(r.display_name ?? `User #${r.user_id}`),
+    task_id: Number(r.task_id),
+    hours: Number(r.hours ?? 0),
+  }))
+}
+
+/** One month of a project's history, from R8. */
+export type ProjectMonthRow = {
+  month: string
+  total_hours: number
+  hours_on_estimated: number
+  hours_on_unestimated: number
+  coverage_pct: number | null
+  team_members: number
+  tasks_touched: number
+}
+
+export async function fetchProjectMonthSeries(projectId: number): Promise<ProjectMonthRow[]> {
+  const { data, error } = await supabase
+    .from('v_metric_project_month')
+    .select('month, total_hours, hours_on_estimated, hours_on_unestimated, coverage_pct, team_members, tasks_touched')
+    .eq('project_id', projectId)
+    .order('month', { ascending: true })
+  if (error) throw error
+  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+    month: String(r.month),
+    total_hours: Number(r.total_hours ?? 0),
+    hours_on_estimated: Number(r.hours_on_estimated ?? 0),
+    hours_on_unestimated: Number(r.hours_on_unestimated ?? 0),
+    coverage_pct: r.coverage_pct == null ? null : Number(r.coverage_pct),
+    team_members: Number(r.team_members ?? 0),
+    tasks_touched: Number(r.tasks_touched ?? 0),
+  }))
+}
+
+/** Created/completed dates for the backlog-flow chart, from the S1 scope base. */
+export type ProjectFlowRow = { created_on: string; completed_on: string | null }
+
+export async function fetchProjectFlowRows(projectId: number): Promise<ProjectFlowRow[]> {
+  const rows = await fetchAllPages<Record<string, unknown>>((from, to) =>
+    supabase
+      .from('v_scope_tasks')
+      .select('created_on, completed_on')
+      .eq('project_id', projectId)
+      .order('task_id', { ascending: true })
+      .range(from, to),
+  )
+  return rows.map((r) => ({
+    created_on: String(r.created_on),
+    completed_on: (r.completed_on as string | null) ?? null,
+  }))
+}
+
+/** §5 bulk-close days for one project — excluded from flow trends, annotated. */
+export type BulkCloseDay = { close_date: string; completions: number }
+
+export async function fetchProjectBulkCloseDays(projectId: number): Promise<BulkCloseDay[]> {
+  const { data, error } = await supabase
+    .from('v_bulk_close_days')
+    .select('close_date, completions')
+    .eq('project_id', projectId)
+    .order('close_date', { ascending: true })
+  if (error) throw error
+  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+    close_date: String(r.close_date),
+    completions: Number(r.completions ?? 0),
+  }))
+}
+
+/**
+ * The project's Radar signals row — the firing banner, runway, and write-off
+ * facts. `null` means the project is **outside the dashboard scope** (the view
+ * has one row per in-scope project), which the page states explicitly instead
+ * of rendering empty metrics.
+ */
+export async function fetchProjectSignalsRow(projectId: number): Promise<ProjectSignals | null> {
+  const { data, error } = await supabase
+    .from('v_metric_project_signals')
+    .select(SIGNAL_COLUMNS)
+    .eq('project_id', projectId)
+    .maybeSingle()
+  if (error) throw error
+  if (!data) return null
+  return normalizeSignals(data as unknown as Record<string, unknown>)
+}
+
+/** One (task, person, month) slice of the project inside a month range — S7. */
+export type ProjectPeriodRow = {
+  task_id: number
+  user_id: number
+  display_name: string
+  month: string
+  /** Hours this person logged on this task in this month — the only additive column. */
+  hours: number
+  // task-lifetime facts, repeated per row — never summed
+  task_name: string
+  assignee_id: number | null
+  source: string | null
+  task_jira_key: string | null
+  created_on: string
+  is_completed: boolean
+  estimate_hours: number | null
+  actual_hours: number
+  ratio: number | null
+  is_estimated: boolean
+  overrun_hours: number
+  is_live_overrun: boolean
+  is_bucket: boolean
+  qa_iterations: number | null
+  qa_bugs: number | null
+}
+
+export async function fetchProjectPeriodRows(
+  projectId: number,
+  fromMonth: string,
+  toMonth: string,
+): Promise<ProjectPeriodRow[]> {
+  const rows = await fetchAllPages<Record<string, unknown>>((from, to) =>
+    supabase
+      .from('v_metric_task_contributor_month')
+      .select(
+        'task_id, user_id, display_name, month, hours, task_name, assignee_id, source, task_jira_key, ' +
+          'created_on, is_completed, estimate_hours, actual_hours, ratio, is_estimated, overrun_hours, ' +
+          'is_live_overrun, is_bucket, qa_iterations, qa_bugs',
+      )
+      .eq('project_id', projectId)
+      .gte('month', fromMonth)
+      .lte('month', toMonth)
+      .order('task_id', { ascending: true })
+      .order('user_id', { ascending: true })
+      .order('month', { ascending: true })
+      .range(from, to),
+  )
+  return rows.map((r) => ({
+    task_id: Number(r.task_id),
+    user_id: Number(r.user_id),
+    display_name: String(r.display_name ?? `User #${r.user_id}`),
+    month: String(r.month),
+    hours: Number(r.hours ?? 0),
+    task_name: String(r.task_name ?? ''),
+    assignee_id: r.assignee_id == null ? null : Number(r.assignee_id),
+    source: (r.source as string | null) ?? null,
+    task_jira_key: (r.task_jira_key as string | null) ?? null,
+    created_on: String(r.created_on),
+    is_completed: Boolean(r.is_completed),
+    estimate_hours: r.estimate_hours == null ? null : Number(r.estimate_hours),
+    actual_hours: Number(r.actual_hours ?? 0),
+    ratio: r.ratio == null ? null : Number(r.ratio),
+    is_estimated: Boolean(r.is_estimated),
+    overrun_hours: Number(r.overrun_hours ?? 0),
+    is_live_overrun: Boolean(r.is_live_overrun),
+    is_bucket: Boolean(r.is_bucket),
+    qa_iterations: r.qa_iterations == null ? null : Number(r.qa_iterations),
+    qa_bugs: r.qa_bugs == null ? null : Number(r.qa_bugs),
   }))
 }
 
