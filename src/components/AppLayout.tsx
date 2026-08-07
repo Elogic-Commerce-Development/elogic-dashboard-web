@@ -39,10 +39,12 @@ export function AppLayout() {
   /**
    * The FilterBar is an **allowlist**, and that inversion is the fix for a real
    * defect: it used to be an opt-OUT list, so any path not named in it rendered
-   * the bar — including every unmatched URL. F7's deployed pass found the
-   * retired `/dashboard` serving a project multi-select floating above an empty
-   * page. Opt-out means "new surfaces get the FilterBar by accident"; opt-in
-   * means a page has to ask.
+   * the bar — including every unmatched URL. F7's deployed pass caught this when
+   * `/dashboard` was briefly deleted: the dead route served a project
+   * multi-select floating above an empty page. (`/dashboard` is back, but the
+   * hazard was never about that route — it was about every URL the list did not
+   * happen to name.) Opt-out means "new surfaces get the FilterBar by accident";
+   * opt-in means a page has to ask.
    *
    * Only `/projects` asks. Every other surface declares its own scope: Radar
    * over fixed signal windows, Estimation over the estimating segments, Quality
