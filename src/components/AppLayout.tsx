@@ -10,9 +10,13 @@ import { TrackingSinceBanner } from './TrackingSinceBanner'
 /**
  * §3's target IA, complete as of F7: Radar, Estimation, Quality, Write-offs,
  * People, Projects — in the plan's own order, which runs roughly from daily
- * glance to monthly review. The legacy Dashboard is gone; it was the last page
- * outside the target IA and the last consumer of the pre-redesign
- * `v_dashboard_*` views.
+ * glance to monthly review.
+ *
+ * Dashboard sits last and outside that order. F7 deleted it and the owner
+ * reversed that (2026-08-07): it stays as a rolled-up overview, and it is what
+ * the header logo now points at. It is listed here as well as being the logo's
+ * destination so there is still a way back to it once you have navigated away —
+ * a logo-only entrance is a page you can leave but not return to.
  */
 const navItems = [
   { to: '/radar' as const, label: 'Radar' },
@@ -21,6 +25,7 @@ const navItems = [
   { to: '/write-offs' as const, label: 'Write-offs' },
   { to: '/people' as const, label: 'People' },
   { to: '/projects' as const, label: 'Projects' },
+  { to: '/dashboard' as const, label: 'Dashboard' },
 ]
 
 export function AppLayout() {
@@ -29,40 +34,26 @@ export function AppLayout() {
   const [filters, setFilters] = useState<Filters>(defaultFilters)
   const routerState = useRouterState()
   const pathname = routerState.location.pathname
-  // Radar answers "what needs attention now" over fixed signal windows, and
-  // Estimation declares its own scope (fixed-scope + maintenance) as the point
-  // of the page — neither takes the entity filters.
   const isRadar = pathname === '/' || pathname === '/radar'
-  const isEstimation = pathname === '/estimation'
-  // F7's two pages likewise declare their own scope in words at the top and in
-  // the footer. Write-offs in particular is *company-wide* by definition (§5
-  // pins 8.8% against the whole company and splits it in/out of scope on the
-  // page itself), so a project multi-select would silently redefine the metric
-  // rather than filter it.
-  const isQuality = pathname === '/quality'
-  const isWriteOffs = pathname === '/write-offs'
-  // F5: /people declares its own population — §4.5's active roster, grouped by
-  // department — the way Radar and Estimation declare theirs. A user
-  // multi-select over a page of coaching cards would let someone quietly
-  // narrow the roster to one colleague, which is the opposite of what a
-  // no-ranking page is for, so it goes.
-  const isPeopleList = pathname === '/people'
-  // /people/<id>, /projects/<id> and /tasks/<id> are all scoped to a single
-  // entity, so the global project + user multi-select adds no value there.
-  const isContributorDetail = /^\/people\/[^/]+/.test(pathname)
-  const isProjectDetail = /^\/projects\/[^/]+/.test(pathname)
-  const isTaskDetail = /^\/tasks\/[^/]+/.test(pathname)
-  const hideFilterBar =
-    isRadar ||
-    isEstimation ||
-    isQuality ||
-    isWriteOffs ||
-    isPeopleList ||
-    isContributorDetail ||
-    isProjectDetail ||
-    isTaskDetail
-  // /projects is the one list grid still taking an entity filter.
+
+  /**
+   * The FilterBar is an **allowlist**, and that inversion is the fix for a real
+   * defect: it used to be an opt-OUT list, so any path not named in it rendered
+   * the bar — including every unmatched URL. F7's deployed pass found the
+   * retired `/dashboard` serving a project multi-select floating above an empty
+   * page. Opt-out means "new surfaces get the FilterBar by accident"; opt-in
+   * means a page has to ask.
+   *
+   * Only `/projects` asks. Every other surface declares its own scope: Radar
+   * over fixed signal windows, Estimation over the estimating segments, Quality
+   * and Write-offs in words at the top and in the footer (Write-offs is
+   * *company-wide* by definition — §5 pins 8.8% against the whole company — so a
+   * project filter would silently redefine the metric rather than filter it),
+   * /people over §4.5's roster, /dashboard over its own period switcher, and the
+   * three detail pages over one entity each.
+   */
   const isProjectsList = pathname === '/projects'
+  const hideFilterBar = !isProjectsList
 
   return (
     <FilterContext value={{ filters, setFilters }}>
@@ -70,7 +61,14 @@ export function AppLayout() {
         <header className="border-b border-neutral-200 bg-white">
           <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
             <div className="flex items-center gap-6">
-              <Link to="/" className="text-lg font-semibold text-neutral-900">
+              {/*
+                The wordmark goes to /dashboard, on the owner's call
+                (2026-08-07). Note this is deliberately NOT the same as `/`,
+                which still redirects to Radar per §3 — typing the bare domain
+                lands on the triage page, clicking the wordmark lands on the
+                rolled-up overview.
+              */}
+              <Link to="/dashboard" className="text-lg font-semibold text-neutral-900">
                 Elogic Dashboard
               </Link>
               <nav className="flex gap-1">

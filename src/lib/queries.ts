@@ -114,6 +114,67 @@ export type MonthlyTrend = {
 }
 
 
+export type DashboardKpiMonth = {
+  month: string
+  total_tasks: number
+  estimated_tasks: number
+  total_hours: number
+  unestimated_tasks_with_time: number
+  unestimated_hours: number
+  overrun_tasks: number
+  overrun_hours: number
+}
+
+export type DashboardAccuracyMonth = {
+  month: string
+  mean_usage: number | null
+  min_usage: number | null
+  max_usage: number | null
+  sample_size: number
+}
+
+export type DashboardQualityMonth = {
+  month: string
+  iter_median: number | null
+  iter_p25: number | null
+  iter_p75: number | null
+  iter_sample_size: number
+  iter_any_capped: boolean
+  bug_median: number | null
+  bug_p25: number | null
+  bug_p75: number | null
+  bug_sample_size: number
+  bug_any_capped: boolean
+}
+
+export type RecentUnestimated = {
+  task_id: number
+  task_name: string
+  project_id: number
+  project_name: string
+  recent_hours: number
+  total_hours: number
+  last_record_date: string
+  source: string | null
+  task_jira_key: string | null
+  project_jira_key: string | null
+}
+
+export type RecentOverrun = {
+  task_id: number
+  task_name: string
+  project_id: number
+  project_name: string
+  estimate_hours: number
+  actual_hours: number
+  ratio: number
+  recent_hours: number
+  last_record_date: string
+  source: string | null
+  task_jira_key: string | null
+  project_jira_key: string | null
+}
+
 export type ProjectListItem = { id: number; name: string; label_id: number | null; is_completed: boolean }
 export type UserListItem = { id: number; display_name: string; class: string | null }
 
@@ -1086,6 +1147,123 @@ export async function fetchProjectPeriodRows(
     is_bucket: Boolean(r.is_bucket),
     qa_iterations: r.qa_iterations == null ? null : Number(r.qa_iterations),
     qa_bugs: r.qa_bugs == null ? null : Number(r.qa_bugs),
+  }))
+}
+
+/* ── Dashboard overview (server-side aggregation; see v_dashboard_* views) ── */
+
+export async function fetchDashboardKpisMonthly(): Promise<DashboardKpiMonth[]> {
+  const { data, error } = await supabase
+    .from('v_dashboard_kpis_monthly')
+    .select('*')
+    .order('month', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as DashboardKpiMonth[]
+}
+
+export async function fetchDashboardAccuracyMonthly(): Promise<DashboardAccuracyMonth[]> {
+  const { data, error } = await supabase
+    .from('v_dashboard_accuracy_monthly')
+    .select('*')
+    .order('month', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as DashboardAccuracyMonth[]
+}
+
+export async function fetchDashboardQualityMonthly(): Promise<DashboardQualityMonth[]> {
+  const { data, error } = await supabase
+    .from('v_dashboard_quality_monthly')
+    .select('*')
+    .order('month', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as DashboardQualityMonth[]
+}
+
+export async function fetchDashboardTrend(): Promise<MonthlyTrend[]> {
+  const { data, error } = await supabase
+    .from('v_dashboard_trend_monthly')
+    .select('*')
+    .order('month', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as MonthlyTrend[]
+}
+
+/** Trailing-30-day cutoff (UTC date), matching the old client computeShortlists. */
+function thirtyDaysAgoIso(): string {
+  const cutoff = new Date()
+  cutoff.setDate(cutoff.getDate() - 30)
+  return cutoff.toISOString().split('T')[0]
+}
+
+export async function fetchDashboardRecentOverruns(limit = 5): Promise<RecentOverrun[]> {
+  // ratio > 1 ⟺ estimate_hours > 0 AND actual_hours > estimate_hours.
+  const { data, error } = await supabase
+    .from('v_dashboard_tasks')
+    .select(
+      'task_id, task_name, project_id, project_name, estimate_hours, actual_hours, ratio, last_record_date, source, task_jira_key, project_jira_key',
+    )
+    .gt('ratio', 1)
+    .gte('last_record_date', thirtyDaysAgoIso())
+    // actual_hours desc, then created_on/task_id desc as deterministic
+    // tie-breakers — the old client sorted a created_on-desc list with a
+    // stable sort, so ties resolved to the most-recent task. Without these,
+    // PostgREST tie order is arbitrary and the top-5 could differ at a tie.
+    .order('actual_hours', { ascending: false })
+    .order('created_on', { ascending: false })
+    .order('task_id', { ascending: false })
+    .limit(limit)
+  if (error) throw error
+  return ((data ?? []) as Array<{
+    task_id: number; task_name: string; project_id: number; project_name: string
+    estimate_hours: number; actual_hours: number; ratio: number; last_record_date: string
+    source: string | null; task_jira_key: string | null; project_jira_key: string | null
+  }>).map((t) => ({
+    task_id: t.task_id,
+    task_name: t.task_name,
+    project_id: t.project_id,
+    project_name: t.project_name,
+    estimate_hours: Number(t.estimate_hours),
+    actual_hours: Number(t.actual_hours),
+    ratio: Number(t.ratio),
+    recent_hours: Number(t.actual_hours),
+    last_record_date: t.last_record_date,
+    source: t.source,
+    task_jira_key: t.task_jira_key,
+    project_jira_key: t.project_jira_key,
+  }))
+}
+
+export async function fetchDashboardRecentUnestimated(limit = 5): Promise<RecentUnestimated[]> {
+  const { data, error } = await supabase
+    .from('v_dashboard_tasks')
+    .select(
+      'task_id, task_name, project_id, project_name, actual_hours, last_record_date, source, task_jira_key, project_jira_key',
+    )
+    .is('estimate_hours', null)
+    .eq('is_completed', false)
+    .gt('actual_hours', 0)
+    .gte('last_record_date', thirtyDaysAgoIso())
+    // Deterministic tie-breakers — see fetchDashboardRecentOverruns.
+    .order('actual_hours', { ascending: false })
+    .order('created_on', { ascending: false })
+    .order('task_id', { ascending: false })
+    .limit(limit)
+  if (error) throw error
+  return ((data ?? []) as Array<{
+    task_id: number; task_name: string; project_id: number; project_name: string
+    actual_hours: number; last_record_date: string
+    source: string | null; task_jira_key: string | null; project_jira_key: string | null
+  }>).map((t) => ({
+    task_id: t.task_id,
+    task_name: t.task_name,
+    project_id: t.project_id,
+    project_name: t.project_name,
+    recent_hours: Number(t.actual_hours),
+    total_hours: Number(t.actual_hours),
+    last_record_date: t.last_record_date,
+    source: t.source,
+    task_jira_key: t.task_jira_key,
+    project_jira_key: t.project_jira_key,
   }))
 }
 
