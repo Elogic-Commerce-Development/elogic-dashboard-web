@@ -2531,6 +2531,7 @@ export type SecondRoundTask = {
   qa_iterations: number
   qa_iterations_capped: boolean
   qa_bugs: number | null
+  qa_bugs_capped: boolean
   actual_hours: number
   estimate_hours: number | null
   last_time_on: string | null
@@ -2549,8 +2550,8 @@ export async function fetchSecondRoundTasks(): Promise<SecondRoundTask[]> {
     .from('v_metric_tasks')
     .select(
       'task_id, project_id, project_name, task_name, source, task_jira_key, project_jira_key, ' +
-        'qa_iterations, qa_iterations_capped, qa_bugs, actual_hours, estimate_hours, ' +
-        'last_time_on, days_since_time',
+        'qa_iterations, qa_iterations_capped, qa_bugs, qa_bugs_capped, actual_hours, ' +
+        'estimate_hours, last_time_on, days_since_time',
     )
     .eq('is_second_qa_round', true)
     .order('qa_iterations', { ascending: false })
@@ -2568,6 +2569,7 @@ export async function fetchSecondRoundTasks(): Promise<SecondRoundTask[]> {
     qa_iterations: Number(r.qa_iterations ?? 0),
     qa_iterations_capped: Boolean(r.qa_iterations_capped),
     qa_bugs: r.qa_bugs == null ? null : Number(r.qa_bugs),
+    qa_bugs_capped: Boolean(r.qa_bugs_capped),
     actual_hours: Number(r.actual_hours ?? 0),
     estimate_hours: r.estimate_hours == null ? null : Number(r.estimate_hours),
     last_time_on: (r.last_time_on as string | null) ?? null,

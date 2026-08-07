@@ -16,7 +16,16 @@ import {
 import type { WriteoffMonth } from '@/lib/writeoffs'
 import { MONTHLY_ALERT_PCT, monthlyWriteoffTone } from '@/lib/writeoffPolicy'
 
-type Point = WriteoffMonth & { label: string }
+type Point = WriteoffMonth & {
+  label: string
+  /**
+   * The in-scope value as measured. `in_scope_pct` is nulled for the partial
+   * month so the *line* stops there — but the tooltip must not then report a
+   * dash, which reads as "no in-scope hours" when the truth is "measured, and
+   * deliberately withheld from a trend".
+   */
+  in_scope_actual: number | null
+}
 
 function monthLabel(iso: string): string {
   return new Date(iso + 'T00:00:00Z').toLocaleDateString('en-US', {
@@ -52,8 +61,11 @@ function TrendTooltip({ active, payload }: TooltipContentProps) {
         <div>
           <span className="text-neutral-500">In-scope delivery:</span>{' '}
           <span className="font-medium">
-            {row.in_scope_pct == null ? '—' : `${row.in_scope_pct.toFixed(1)}%`}
+            {row.in_scope_actual == null ? '—' : `${row.in_scope_actual.toFixed(1)}%`}
           </span>
+          {row.partial && row.in_scope_actual != null ? (
+            <span className="text-neutral-500"> · measured, held off the line</span>
+          ) : null}
         </div>
         <div className="pt-1 text-neutral-500">
           {row.company_non_billable.toFixed(1)}h written off of{' '}
@@ -104,6 +116,7 @@ export function WriteoffTrendChart({
       months.map((m) => ({
         ...m,
         label: monthLabel(m.month),
+        in_scope_actual: m.in_scope_pct,
         // The bars fade the in-progress month; the line has to drop it outright.
         // A line segment reaching 64.9% because three days of admin landed
         // before any delivery hours is not a trend, and unlike a faded bar a
@@ -167,7 +180,15 @@ export function WriteoffTrendChart({
             {data.map((d) => (
               <Cell
                 key={d.month}
-                fill={TONE_FILL[monthlyWriteoffTone(d.company_pct, baselinePct ?? MONTHLY_ALERT_PCT)]}
+                fill={
+                  // No baseline means no tone. Falling back to the alert line
+                  // would silently recolour every bar — emerald for anything
+                  // under 10% — using a threshold the chart is not drawing, so
+                  // the colour would assert a comparison the reader cannot see.
+                  baselinePct == null
+                    ? TONE_FILL.neutral
+                    : TONE_FILL[monthlyWriteoffTone(d.company_pct, baselinePct)]
+                }
                 fillOpacity={d.partial ? 0.28 : 0.8}
               />
             ))}

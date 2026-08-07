@@ -177,6 +177,11 @@ export function WriteOffsPage() {
             }
           />
           {/*
+            A successful query that returns no usable month is not an all-clear
+            either: PostgREST answers 200 with `[]` when RLS denies rows on a
+            backing relation — a trap this project has already shipped once — so
+            "0 of 0" must never wear the healthy colour.
+
             This tile lives in the headline row but its data comes from the
             *month* fetch, not the project fetch the row is gated on. Gate it
             separately or a failed month query renders a green "0 of 0" —
@@ -185,8 +190,22 @@ export function WriteOffsPage() {
           */}
           <StatTile
             label="Months over the alert line"
-            value={failed.trend ? '—' : pending.trend ? '…' : `${overAlert.length} of ${closed.length}`}
-            tone={failed.trend || pending.trend ? 'neutral' : overAlert.length > 0 ? 'amber' : 'emerald'}
+            value={
+              failed.trend
+                ? '—'
+                : pending.trend
+                  ? '…'
+                  : closed.length === 0
+                    ? '—'
+                    : `${overAlert.length} of ${closed.length}`
+            }
+            tone={
+              failed.trend || pending.trend || closed.length === 0
+                ? 'neutral'
+                : overAlert.length > 0
+                  ? 'amber'
+                  : 'emerald'
+            }
             caption={
               failed.trend ? (
                 <span className="text-red-700">
@@ -194,6 +213,11 @@ export function WriteOffsPage() {
                 </span>
               ) : pending.trend ? (
                 <>loading the monthly series…</>
+              ) : closed.length === 0 ? (
+                <span className="text-amber-700">
+                  The monthly series returned no closed month with tagged hours. That is not zero
+                  months over the line — it is nothing measured.
+                </span>
               ) : (
                 <>
                   closed months at or above {MONTHLY_ALERT_PCT}% company write-off
@@ -227,11 +251,22 @@ export function WriteOffsPage() {
             }
           >
             <WriteoffTrendChart months={series} baselinePct={baseline} />
+            {baseline == null ? (
+              <p className="border-t border-neutral-100 px-3 py-2 text-[11px] leading-relaxed text-amber-700">
+                The baseline could not be loaded — it comes from the all-time project rollup, which
+                is a different query from the monthly series. The bars are therefore drawn
+                uncoloured rather than toned against a line that is not on the chart.
+              </p>
+            ) : null}
             <p className="border-t border-neutral-100 px-3 py-2 text-[11px] leading-relaxed text-neutral-500">
-              The month in progress is drawn faint and excluded from the baseline: a month a few
-              days old reads far above trend purely because non-billable admin lands before the
-              billable delivery hours do, and plotting it like a closed month manufactures the very
-              drift this chart exists to detect.
+              The month in progress is drawn faint, dropped from the in-scope line entirely, and
+              excluded from the trailing figure above: a month a few days old reads far above trend
+              purely because non-billable admin lands before the billable delivery hours do, and
+              plotting it like a closed month manufactures the very drift this chart exists to
+              detect. It is <em>not</em> excluded from the grey baseline — that is §5's all-time
+              company share, which has no upper date bound — but at barely a hundred tagged hours
+              inside a 144,000-hour denominator it moves that line by under three hundredths of a
+              point, so both readings round to the same number.
             </p>
           </Panel>
         )}

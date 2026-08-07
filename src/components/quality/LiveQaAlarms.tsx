@@ -82,7 +82,16 @@ export function LiveQaAlarms({ tasks }: { tasks: SecondRoundTask[] }) {
             </span>
 
             {t.qa_bugs != null ? (
-              <span className="shrink-0 text-xs text-neutral-500">{t.qa_bugs} bugs</span>
+              <span
+                className="shrink-0 text-xs text-neutral-500"
+                title={
+                  t.qa_bugs_capped
+                    ? `${t.qa_bugs} or more bugs found (capped upstream)`
+                    : `${t.qa_bugs} bugs found`
+                }
+              >
+                {formatQa(t.qa_bugs, t.qa_bugs_capped)} bugs
+              </span>
             ) : null}
 
             <span

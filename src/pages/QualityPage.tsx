@@ -236,11 +236,13 @@ export function QualityPage() {
             <ReworkLadder rungs={ladder} />
             <p className="border-t border-neutral-100 px-3 py-2 text-[11px] leading-relaxed text-neutral-500">
               {CAP_NOTE} <span className="font-medium text-neutral-600">On the overrun rates:</span>{' '}
-              §4.3 illustrates this ladder as 21% → 47% → 64%. Those are <em>out-of-band</em> rates
-              (actual above 1.2× estimate), which on today's data read 22.2% → 44.6% → 62.3%. The
-              rates above use §5's own definition of an overrun task — any actual above estimate —
-              because that is what "overrun" already means on the Estimation page and the Projects
-              index, and one word cannot mean two things across three pages.
+              §4.3 illustrates this ladder as 21% → 47% → 64%. Those reproduce as the share of
+              tasks running above <em>1.2×</em> estimate — §5's in-band ceiling — which on today's
+              data reads 22.2% → 44.6% → 62.3%. (Not "out of band": §5's band is two-sided,
+              0.8–1.2, so its complement would sweep in underruns too.) The rates above instead use
+              §5's own definition of an overrun task — any actual above estimate — because that is
+              what "overrun" already means on the Estimation page and the Projects index, and one
+              word cannot mean two things across three pages.
             </p>
           </Panel>
         )}
@@ -320,10 +322,11 @@ export function QualityPage() {
               These two tiles carry <em>coverage only, deliberately</em>. Jira derives iterations
               from the issue changelog automatically; ActiveCollab depends on somebody applying a
               label. §4.3 rules out cross-source comparisons, so no returned rate is shown beside
-              them — the two would be computed over populations differing by a factor of eighteen,
-              and placing them together would invite exactly the quality comparison the rule
-              exists to prevent. The gap between these numbers is a fact about process, not about
-              the teams. Per-project returned rates are in the table below, where each row has one
+              them — and the reason is selection, not sample size. Jira's rate would describe
+              essentially all of its completed work; ActiveCollab's would describe the small
+              minority of tickets somebody chose to label, which is not a random sample of
+              anything. The gap between these two numbers is a fact about process, not about the
+              teams. Per-project returned rates are in the table below, where each row has one
               source and one n.
             </p>
             <CoverageScoreboard rows={projects} minSample={minSample} />
@@ -368,9 +371,9 @@ export function QualityPage() {
           than a reading of an existing one. ActiveCollab carries <code>BUG</code>,{' '}
           <code>EPICOR BUG</code>, <code>SLACK BUG</code> and <code>BUG_RELEASE</code> labels — and
           a <code>NOT A BUG</code> label, which is its own problem for any naive rule. Jira's
-          natural equivalent is the issue type: the sync already requests it from the API but never
-          stores it, so nothing in the schema carries it today and no Jira task carries a bug label
-          either. So the choice is two decisions, not one — what counts as a bug, and whether the
+          natural equivalents are its issue type and its own labels — the sync <em>already requests
+          both</em> from the API and stores neither, so nothing in the schema carries them and no
+          Jira task carries a bug label today. So the choice is two decisions, not one — what counts as a bug, and whether the
           band is AC-only like write-off or waits on persisting the Jira field. Both belong to the
           owner and then to SQL; logged as an open question rather than approximated here.
         </p>
