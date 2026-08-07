@@ -364,13 +364,15 @@ export function QualityPage() {
         </p>
         <p>
           <span className="font-medium text-neutral-600">Not on this page.</span> §4.3's bug-inflow
-          band is absent. No <em>view</em> classifies a task as a bug, and deciding what would
-          count is a new metric definition rather than a reading of an existing one: ActiveCollab
-          carries <code>BUG</code>, <code>EPICOR BUG</code>, <code>SLACK BUG</code> and{' '}
-          <code>BUG_RELEASE</code> labels — and a <code>NOT A BUG</code> label — while Jira has no
-          equivalent, so any rule chosen would also decide whether the band can be read across
-          sources at all. That is the owner's call and belongs in SQL once made; it is logged as an
-          open question rather than approximated here.
+          band is absent, because deciding what counts as a bug is a new metric definition rather
+          than a reading of an existing one. ActiveCollab carries <code>BUG</code>,{' '}
+          <code>EPICOR BUG</code>, <code>SLACK BUG</code> and <code>BUG_RELEASE</code> labels — and
+          a <code>NOT A BUG</code> label, which is its own problem for any naive rule. Jira's
+          natural equivalent is the issue type: the sync already requests it from the API but never
+          stores it, so nothing in the schema carries it today and no Jira task carries a bug label
+          either. So the choice is two decisions, not one — what counts as a bug, and whether the
+          band is AC-only like write-off or waits on persisting the Jira field. Both belong to the
+          owner and then to SQL; logged as an open question rather than approximated here.
         </p>
       </div>
     </div>
