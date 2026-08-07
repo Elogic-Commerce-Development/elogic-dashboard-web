@@ -2,6 +2,7 @@ import { createRootRoute, createRoute, createRouter, redirect } from '@tanstack/
 import { AppLayout } from '@/components/AppLayout'
 import { NotFound } from '@/components/NotFound'
 import { RadarPage } from '@/pages/RadarPage'
+import { DashboardPage } from '@/pages/DashboardPage'
 import { EstimationPage } from '@/pages/EstimationPage'
 import { QualityPage } from '@/pages/QualityPage'
 import { WriteOffsPage } from '@/pages/WriteOffsPage'
@@ -32,6 +33,7 @@ export type PeriodSearch = {
 /** Back-compat alias — the detail routes' search shape has not changed. */
 export type ContributorDetailSearch = PeriodSearch
 export type ProjectDetailSearch = PeriodSearch
+export type DashboardSearch = PeriodSearch
 
 function periodSearchValidator(group: PeriodGroup) {
   return (search: Record<string, unknown>): PeriodSearch => ({
@@ -67,24 +69,26 @@ const radarRoute = createRoute({
 })
 
 /**
- * `/dashboard` is gone as of F7, on the owner's call.
+ * The pre-redesign Dashboard — **kept, on the owner's call (2026-08-07)**.
  *
- * It was the last pre-redesign page: §4.1 had already given its KPI cards to
- * Radar and §4.2 its adoption/accuracy charts to Estimation, and it was the
- * only surface still reading the legacy `v_dashboard_*` generation — whole
- * company, back to 2017, a different population from every §5 figure beside
- * it. F4 left it standing because "cutting a live page nobody asked to cut is
- * not a deletion this session owns"; the progress log then carried it as an
- * open question with the note that the cheapest sequencing was to cut it once
- * Quality had a home for its signals section. Quality now does — rebuilt on
- * the canonical views rather than inherited on the legacy ones.
+ * F7 deleted it, and the owner reversed that: it is still useful as a single
+ * rolled-up view even though §3's target IA does not have a slot for it. It is
+ * also the **header logo's destination**, so it is the first thing most people
+ * land on — see `AppLayout`.
  *
- * A bookmark to `/dashboard` now falls through to `NotFound`, which names the
- * three routes its content went to. Deliberately not a redirect: the content
- * split three ways, so there is no honest single destination. The deployed pass
- * caught the first cut of this rendering a *blank* page instead — see
- * components/NotFound.tsx.
+ * What that means, stated plainly rather than left implicit: this page reads the
+ * legacy `v_dashboard_*` generation — whole company, back to 2017 — so its
+ * figures are a **different population** from every §5 number on Radar,
+ * Estimation, Quality, Write-offs, People and Projects. That is not a bug to be
+ * fixed by quietly repointing it; it is why the redesign exists. The page says
+ * so on its face rather than letting a reader assume the two agree.
  */
+const dashboardRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/dashboard',
+  component: DashboardPage,
+  validateSearch: periodSearchValidator(PERIOD_GROUPS.dashboard),
+})
 
 /**
  * §4.2. No `validateSearch`: the page has no period control, so it has no
@@ -163,6 +167,7 @@ const taskDetailRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   radarRoute,
+  dashboardRoute,
   estimationRoute,
   qualityRoute,
   writeOffsRoute,

@@ -79,6 +79,12 @@ export type PeriodGroup = {
 }
 
 export const PERIOD_GROUPS = {
+  /** Dashboard home — rolling windows only, no custom range (see F2). */
+  dashboard: {
+    primary: ['last_3_months', 'last_6_months', 'last_12_months', 'current_year', 'all_time'],
+    secondary: [],
+    default: 'last_6_months',
+  },
   /** Person detail — deliberately excludes `all_time`. */
   person: {
     primary: ['current_week', 'last_week', 'current_month'],

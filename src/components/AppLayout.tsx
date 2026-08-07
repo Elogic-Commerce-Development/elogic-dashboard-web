@@ -10,9 +10,13 @@ import { TrackingSinceBanner } from './TrackingSinceBanner'
 /**
  * §3's target IA, complete as of F7: Radar, Estimation, Quality, Write-offs,
  * People, Projects — in the plan's own order, which runs roughly from daily
- * glance to monthly review. The legacy Dashboard is gone; it was the last page
- * outside the target IA and the last consumer of the pre-redesign
- * `v_dashboard_*` views.
+ * glance to monthly review.
+ *
+ * Dashboard sits last and outside that order. F7 deleted it and the owner
+ * reversed that (2026-08-07): it stays as a rolled-up overview, and it is what
+ * the header logo now points at. It is listed here as well as being the logo's
+ * destination so there is still a way back to it once you have navigated away —
+ * a logo-only entrance is a page you can leave but not return to.
  */
 const navItems = [
   { to: '/radar' as const, label: 'Radar' },
@@ -21,6 +25,7 @@ const navItems = [
   { to: '/write-offs' as const, label: 'Write-offs' },
   { to: '/people' as const, label: 'People' },
   { to: '/projects' as const, label: 'Projects' },
+  { to: '/dashboard' as const, label: 'Dashboard' },
 ]
 
 export function AppLayout() {
@@ -44,7 +49,8 @@ export function AppLayout() {
    * and Write-offs in words at the top and in the footer (Write-offs is
    * *company-wide* by definition — §5 pins 8.8% against the whole company — so a
    * project filter would silently redefine the metric rather than filter it),
-   * /people over §4.5's roster, and the three detail pages over one entity each.
+   * /people over §4.5's roster, /dashboard over its own period switcher, and the
+   * three detail pages over one entity each.
    */
   const isProjectsList = pathname === '/projects'
   const hideFilterBar = !isProjectsList
@@ -55,7 +61,14 @@ export function AppLayout() {
         <header className="border-b border-neutral-200 bg-white">
           <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
             <div className="flex items-center gap-6">
-              <Link to="/" className="text-lg font-semibold text-neutral-900">
+              {/*
+                The wordmark goes to /dashboard, on the owner's call
+                (2026-08-07). Note this is deliberately NOT the same as `/`,
+                which still redirects to Radar per §3 — typing the bare domain
+                lands on the triage page, clicking the wordmark lands on the
+                rolled-up overview.
+              */}
+              <Link to="/dashboard" className="text-lg font-semibold text-neutral-900">
                 Elogic Dashboard
               </Link>
               <nav className="flex gap-1">
