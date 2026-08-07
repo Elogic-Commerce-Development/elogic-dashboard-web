@@ -1,8 +1,9 @@
 import { createRootRoute, createRoute, createRouter, redirect } from '@tanstack/react-router'
 import { AppLayout } from '@/components/AppLayout'
 import { RadarPage } from '@/pages/RadarPage'
-import { DashboardPage } from '@/pages/DashboardPage'
 import { EstimationPage } from '@/pages/EstimationPage'
+import { QualityPage } from '@/pages/QualityPage'
+import { WriteOffsPage } from '@/pages/WriteOffsPage'
 import { PeoplePage } from '@/pages/PeoplePage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
 import { ProjectDetailPage } from '@/pages/ProjectDetailPage'
@@ -30,7 +31,6 @@ export type PeriodSearch = {
 /** Back-compat alias — the detail routes' search shape has not changed. */
 export type ContributorDetailSearch = PeriodSearch
 export type ProjectDetailSearch = PeriodSearch
-export type DashboardSearch = PeriodSearch
 
 function periodSearchValidator(group: PeriodGroup) {
   return (search: Record<string, unknown>): PeriodSearch => ({
@@ -65,19 +65,22 @@ const radarRoute = createRoute({
 })
 
 /**
- * The pre-redesign Dashboard. F4 deleted `/overview` and `/estimates` per §3's
- * kill list, but left this one standing: §8 scopes F4 to those two routes, and
- * cutting a live page nobody asked to cut is not a deletion this session owns.
- * Its adoption/accuracy charts are superseded by the Estimation page's own
- * canonical trends, so the page is now duplicative — see the open question in
- * docs/progress-log.md.
+ * `/dashboard` is gone as of F7, on the owner's call.
+ *
+ * It was the last pre-redesign page: §4.1 had already given its KPI cards to
+ * Radar and §4.2 its adoption/accuracy charts to Estimation, and it was the
+ * only surface still reading the legacy `v_dashboard_*` generation — whole
+ * company, back to 2017, a different population from every §5 figure beside
+ * it. F4 left it standing because "cutting a live page nobody asked to cut is
+ * not a deletion this session owns"; the progress log then carried it as an
+ * open question with the note that the cheapest sequencing was to cut it once
+ * Quality had a home for its signals section. Quality now does — rebuilt on
+ * the canonical views rather than inherited on the legacy ones.
+ *
+ * A bookmark to `/dashboard` now 404s rather than redirecting: the page's
+ * content is split across three different routes, so there is no honest single
+ * destination to send someone to.
  */
-const dashboardRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/dashboard',
-  component: DashboardPage,
-  validateSearch: periodSearchValidator(PERIOD_GROUPS.dashboard),
-})
 
 /**
  * §4.2. No `validateSearch`: the page has no period control, so it has no
@@ -101,6 +104,25 @@ const estimationRoute = createRoute({
  * Pre-F5 bookmarks carrying `?period=…` still resolve: the param is simply
  * ignored rather than rejected.
  */
+/**
+ * §4.3 and §4.4. No `validateSearch`, for the same reason `/estimation` has
+ * none: neither page has a period control. Each metric owns the window its
+ * definition implies — the ladder and the ledger are the all-time §5 figures,
+ * and the two trends run the full series from the 2025 floor, which is the
+ * only window a drift signal can be read against.
+ */
+const qualityRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/quality',
+  component: QualityPage,
+})
+
+const writeOffsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/write-offs',
+  component: WriteOffsPage,
+})
+
 const peopleRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/people',
@@ -137,8 +159,9 @@ const taskDetailRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   radarRoute,
-  dashboardRoute,
   estimationRoute,
+  qualityRoute,
+  writeOffsRoute,
   peopleRoute,
   projectsRoute,
   projectDetailRoute,

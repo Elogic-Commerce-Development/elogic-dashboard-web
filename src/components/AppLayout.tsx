@@ -8,17 +8,19 @@ import { SyncStatusBadge } from './SyncStatusBadge'
 import { TrackingSinceBanner } from './TrackingSinceBanner'
 
 /**
- * §3's target order — Radar, Estimation, People, Projects (Quality and
- * Write-offs join at F7). The legacy Dashboard sits last because it is the one
- * page not in the target IA; §4.1 hands its KPI cards to Radar and its
- * adoption/accuracy charts to Estimation, so it is a leftover, not a section.
+ * §3's target IA, complete as of F7: Radar, Estimation, Quality, Write-offs,
+ * People, Projects — in the plan's own order, which runs roughly from daily
+ * glance to monthly review. The legacy Dashboard is gone; it was the last page
+ * outside the target IA and the last consumer of the pre-redesign
+ * `v_dashboard_*` views.
  */
 const navItems = [
   { to: '/radar' as const, label: 'Radar' },
   { to: '/estimation' as const, label: 'Estimation' },
+  { to: '/quality' as const, label: 'Quality' },
+  { to: '/write-offs' as const, label: 'Write-offs' },
   { to: '/people' as const, label: 'People' },
   { to: '/projects' as const, label: 'Projects' },
-  { to: '/dashboard' as const, label: 'Dashboard' },
 ]
 
 export function AppLayout() {
@@ -27,13 +29,18 @@ export function AppLayout() {
   const [filters, setFilters] = useState<Filters>(defaultFilters)
   const routerState = useRouterState()
   const pathname = routerState.location.pathname
-  // Radar answers "what needs attention now" over fixed signal windows, the
-  // Dashboard aggregates its own scope, and Estimation declares its own scope
-  // (fixed-scope + maintenance) as the point of the page — none of the three
-  // takes the entity filters.
+  // Radar answers "what needs attention now" over fixed signal windows, and
+  // Estimation declares its own scope (fixed-scope + maintenance) as the point
+  // of the page — neither takes the entity filters.
   const isRadar = pathname === '/' || pathname === '/radar'
-  const isDashboard = pathname === '/dashboard'
   const isEstimation = pathname === '/estimation'
+  // F7's two pages likewise declare their own scope in words at the top and in
+  // the footer. Write-offs in particular is *company-wide* by definition (§5
+  // pins 8.8% against the whole company and splits it in/out of scope on the
+  // page itself), so a project multi-select would silently redefine the metric
+  // rather than filter it.
+  const isQuality = pathname === '/quality'
+  const isWriteOffs = pathname === '/write-offs'
   // F5: /people declares its own population — §4.5's active roster, grouped by
   // department — the way Radar and Estimation declare theirs. A user
   // multi-select over a page of coaching cards would let someone quietly
@@ -47,8 +54,9 @@ export function AppLayout() {
   const isTaskDetail = /^\/tasks\/[^/]+/.test(pathname)
   const hideFilterBar =
     isRadar ||
-    isDashboard ||
     isEstimation ||
+    isQuality ||
+    isWriteOffs ||
     isPeopleList ||
     isContributorDetail ||
     isProjectDetail ||
