@@ -8,15 +8,19 @@ import { SyncStatusBadge } from './SyncStatusBadge'
 import { TrackingSinceBanner } from './TrackingSinceBanner'
 
 /**
- * §3's target IA, complete as of F7: Radar, Estimation, Quality, Write-offs,
+ * §3's target IA, and nothing else: Radar, Estimation, Quality, Write-offs,
  * People, Projects — in the plan's own order, which runs roughly from daily
  * glance to monthly review.
  *
- * Dashboard sits last and outside that order. F7 deleted it and the owner
- * reversed that (2026-08-07): it stays as a rolled-up overview, and it is what
- * the header logo now points at. It is listed here as well as being the logo's
- * destination so there is still a way back to it once you have navigated away —
- * a logo-only entrance is a page you can leave but not return to.
+ * **Dashboard is deliberately not here.** It was added alongside the wordmark
+ * link on the argument that a logo-only entrance is a page you can leave but
+ * not return to. Seven items plus the sync badge overflowed the header at real
+ * widths — the wordmark broke across two lines and "Write-offs" split
+ * mid-word — so the owner cut it (2026-08-07). The wordmark is now its only
+ * entrance, which is the conventional place for a home link anyway; the 404
+ * page also links it, and `/dashboard` remains a valid bookmark.
+ *
+ * Adding a seventh item means finding room for it, not just appending it.
  */
 const navItems = [
   { to: '/radar' as const, label: 'Radar' },
@@ -25,7 +29,6 @@ const navItems = [
   { to: '/write-offs' as const, label: 'Write-offs' },
   { to: '/people' as const, label: 'People' },
   { to: '/projects' as const, label: 'Projects' },
-  { to: '/dashboard' as const, label: 'Dashboard' },
 ]
 
 export function AppLayout() {
@@ -39,10 +42,12 @@ export function AppLayout() {
   /**
    * The FilterBar is an **allowlist**, and that inversion is the fix for a real
    * defect: it used to be an opt-OUT list, so any path not named in it rendered
-   * the bar — including every unmatched URL. F7's deployed pass found the
-   * retired `/dashboard` serving a project multi-select floating above an empty
-   * page. Opt-out means "new surfaces get the FilterBar by accident"; opt-in
-   * means a page has to ask.
+   * the bar — including every unmatched URL. F7's deployed pass caught this when
+   * `/dashboard` was briefly deleted: the dead route served a project
+   * multi-select floating above an empty page. (`/dashboard` is back, but the
+   * hazard was never about that route — it was about every URL the list did not
+   * happen to name.) Opt-out means "new surfaces get the FilterBar by accident";
+   * opt-in means a page has to ask.
    *
    * Only `/projects` asks. Every other surface declares its own scope: Radar
    * over fixed signal windows, Estimation over the estimating segments, Quality
@@ -68,10 +73,13 @@ export function AppLayout() {
                 lands on the triage page, clicking the wordmark lands on the
                 rolled-up overview.
               */}
-              <Link to="/dashboard" className="text-lg font-semibold text-neutral-900">
+              <Link
+                to="/dashboard"
+                className="shrink-0 whitespace-nowrap text-lg font-semibold text-neutral-900"
+              >
                 Elogic Dashboard
               </Link>
-              <nav className="flex gap-1">
+              <nav className="flex flex-wrap gap-1">
                 {navItems.map((item) => {
                   // `/` redirects to /radar, so the index path highlights Radar
                   // during the hop rather than leaving the nav blank.
@@ -81,7 +89,7 @@ export function AppLayout() {
                     <Link
                       key={item.to}
                       to={item.to}
-                      className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                      className={`whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition ${
                         active
                           ? 'bg-neutral-900 text-white'
                           : 'text-neutral-600 hover:bg-neutral-100'
@@ -94,7 +102,7 @@ export function AppLayout() {
               </nav>
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="flex shrink-0 items-center gap-4">
               <SyncStatusBadge />
               <button
                 type="button"
