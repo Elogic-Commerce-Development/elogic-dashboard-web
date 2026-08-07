@@ -29,40 +29,25 @@ export function AppLayout() {
   const [filters, setFilters] = useState<Filters>(defaultFilters)
   const routerState = useRouterState()
   const pathname = routerState.location.pathname
-  // Radar answers "what needs attention now" over fixed signal windows, and
-  // Estimation declares its own scope (fixed-scope + maintenance) as the point
-  // of the page — neither takes the entity filters.
   const isRadar = pathname === '/' || pathname === '/radar'
-  const isEstimation = pathname === '/estimation'
-  // F7's two pages likewise declare their own scope in words at the top and in
-  // the footer. Write-offs in particular is *company-wide* by definition (§5
-  // pins 8.8% against the whole company and splits it in/out of scope on the
-  // page itself), so a project multi-select would silently redefine the metric
-  // rather than filter it.
-  const isQuality = pathname === '/quality'
-  const isWriteOffs = pathname === '/write-offs'
-  // F5: /people declares its own population — §4.5's active roster, grouped by
-  // department — the way Radar and Estimation declare theirs. A user
-  // multi-select over a page of coaching cards would let someone quietly
-  // narrow the roster to one colleague, which is the opposite of what a
-  // no-ranking page is for, so it goes.
-  const isPeopleList = pathname === '/people'
-  // /people/<id>, /projects/<id> and /tasks/<id> are all scoped to a single
-  // entity, so the global project + user multi-select adds no value there.
-  const isContributorDetail = /^\/people\/[^/]+/.test(pathname)
-  const isProjectDetail = /^\/projects\/[^/]+/.test(pathname)
-  const isTaskDetail = /^\/tasks\/[^/]+/.test(pathname)
-  const hideFilterBar =
-    isRadar ||
-    isEstimation ||
-    isQuality ||
-    isWriteOffs ||
-    isPeopleList ||
-    isContributorDetail ||
-    isProjectDetail ||
-    isTaskDetail
-  // /projects is the one list grid still taking an entity filter.
+
+  /**
+   * The FilterBar is an **allowlist**, and that inversion is the fix for a real
+   * defect: it used to be an opt-OUT list, so any path not named in it rendered
+   * the bar — including every unmatched URL. F7's deployed pass found the
+   * retired `/dashboard` serving a project multi-select floating above an empty
+   * page. Opt-out means "new surfaces get the FilterBar by accident"; opt-in
+   * means a page has to ask.
+   *
+   * Only `/projects` asks. Every other surface declares its own scope: Radar
+   * over fixed signal windows, Estimation over the estimating segments, Quality
+   * and Write-offs in words at the top and in the footer (Write-offs is
+   * *company-wide* by definition — §5 pins 8.8% against the whole company — so a
+   * project filter would silently redefine the metric rather than filter it),
+   * /people over §4.5's roster, and the three detail pages over one entity each.
+   */
   const isProjectsList = pathname === '/projects'
+  const hideFilterBar = !isProjectsList
 
   return (
     <FilterContext value={{ filters, setFilters }}>

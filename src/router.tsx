@@ -1,5 +1,6 @@
 import { createRootRoute, createRoute, createRouter, redirect } from '@tanstack/react-router'
 import { AppLayout } from '@/components/AppLayout'
+import { NotFound } from '@/components/NotFound'
 import { RadarPage } from '@/pages/RadarPage'
 import { EstimationPage } from '@/pages/EstimationPage'
 import { QualityPage } from '@/pages/QualityPage'
@@ -42,6 +43,7 @@ function periodSearchValidator(group: PeriodGroup) {
 
 const rootRoute = createRootRoute({
   component: AppLayout,
+  notFoundComponent: NotFound,
 })
 
 /**
@@ -77,9 +79,11 @@ const radarRoute = createRoute({
  * Quality had a home for its signals section. Quality now does — rebuilt on
  * the canonical views rather than inherited on the legacy ones.
  *
- * A bookmark to `/dashboard` now 404s rather than redirecting: the page's
- * content is split across three different routes, so there is no honest single
- * destination to send someone to.
+ * A bookmark to `/dashboard` now falls through to `NotFound`, which names the
+ * three routes its content went to. Deliberately not a redirect: the content
+ * split three ways, so there is no honest single destination. The deployed pass
+ * caught the first cut of this rendering a *blank* page instead — see
+ * components/NotFound.tsx.
  */
 
 /**
