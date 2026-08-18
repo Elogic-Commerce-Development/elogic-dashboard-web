@@ -9,6 +9,7 @@ import {
   type TaskTimeEntry,
 } from '@/lib/queries'
 import { formatHours, formatRatio, formatQa, externalTaskLink, externalProjectLink } from '@/lib/format'
+import { describeError } from '@/lib/errors'
 import { buildEmployeeColorMap } from '@/lib/contributorColors'
 import { SourceBadge } from '@/components/SourceBadge'
 import { TaskTimeBreakdown } from '@/components/TaskTimeBreakdown'
@@ -22,28 +23,76 @@ export function TaskDetailPage() {
   const [contributors, setContributors] = useState<TaskContributor[]>([])
   const [entries, setEntries] = useState<TaskTimeEntry[]>([])
   const [loading, setLoading] = useState(true)
+  // One error slot per fetch. They are separate because they mean different
+  // things to a reader: a failed task lookup means "we don't know", a failed
+  // side fetch means "this section is missing, the rest still holds".
+  const [taskError, setTaskError] = useState<string | null>(null)
+  const [entriesError, setEntriesError] = useState<string | null>(null)
+  const [contributorsError, setContributorsError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
 
     async function load() {
       setLoading(true)
+      setTaskError(null)
+      setEntriesError(null)
+      setContributorsError(null)
       try {
-        // The task lookup resolves scope, and scope decides which contributor
-        // grain is correct — so it has to land before that fetch, not beside
+        // allSettled, not all. Only the task lookup can answer "does this task
+        // exist" — but under Promise.all a rejected time-entry fetch took the
+        // pair down with it, left `task` null, and the page then printed
+        // "Task not found." for a task the API had returned 200 for. That is
+        // how a purely additive backend FK presented as four missing tasks in
+        // the 2026-08-07 review (D1). No side fetch may decide not-found.
+        //
+        // The task lookup still resolves scope, and scope decides which
+        // contributor grain is correct, so contributors stay sequential behind
         // it. The time-entry list is raw records and is scope-independent.
-        const [detail, ents] = await Promise.all([
+        const [detailR, entriesR] = await Promise.allSettled([
           fetchTaskDetail(tid),
           fetchTaskTimeRecordEntries(tid),
         ])
         if (cancelled) return
+
+        if (entriesR.status === 'fulfilled') {
+          setEntries(entriesR.value)
+        } else {
+          setEntries([])
+          setEntriesError(describeError(entriesR.reason))
+        }
+
+        if (detailR.status === 'rejected') {
+          setTask(null)
+          setInScope(true)
+          setContributors([])
+          setTaskError(describeError(detailR.reason))
+          return
+        }
+
+        const detail = detailR.value
         setTask(detail?.task ?? null)
         setInScope(detail?.inScope ?? true)
-        setEntries(ents)
-        const contribs = detail ? await fetchTaskContributors(tid, detail.inScope) : []
-        if (!cancelled) setContributors(contribs)
-      } catch {
-        // keep previous state on failure (matches the original no-op .catch)
+        if (!detail) {
+          setContributors([])
+          return
+        }
+
+        try {
+          const contribs = await fetchTaskContributors(tid, detail.inScope)
+          if (!cancelled) setContributors(contribs)
+        } catch (e) {
+          if (!cancelled) {
+            setContributors([])
+            setContributorsError(describeError(e))
+          }
+        }
+      } catch (e) {
+        // Unreachable in practice — allSettled never rejects and the
+        // contributor call has its own catch — but `void load()` installs no
+        // handler, so a surprise has to land somewhere the reader can see it
+        // rather than silently in the console. That silence was the bug.
+        if (!cancelled) setTaskError(describeError(e))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -63,6 +112,18 @@ export function TaskDetailPage() {
 
   if (loading) {
     return <div className="py-12 text-center text-sm text-neutral-400">Loading task...</div>
+  }
+
+  // A failed lookup is not a missing task. We do not know whether this task
+  // exists, and saying "not found" would be a claim we cannot support.
+  if (taskError) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <span className="font-medium">This task could not be loaded.</span> The lookup itself
+        failed, so whether the task exists is unknown — this is not a missing task. Reload; if it
+        persists, the error was: <code className="text-xs">{taskError}</code>
+      </div>
+    )
   }
 
   if (!task) {
@@ -172,16 +233,50 @@ export function TaskDetailPage() {
         )}
       </div>
 
-      <TaskTimeBreakdown
-        estimate={task.estimate_hours}
-        actual={Number(task.actual_hours)}
-        entries={entries}
-        employeeColors={employeeColors}
-      />
+      {/* The breakdown splits `actual` by job type and by person using the
+          entries. With a failed entry fetch it would still draw its headline
+          off the metric view and then report 0h billable, 0h not billable and
+          two empty bars — a confident zero over a query that never answered.
+          So on failure it is replaced, not fed an empty list. */}
+      {entriesError ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <p>
+            <span className="font-medium">Time entries could not be loaded.</span> The task itself
+            loaded — it is the per-entry fetch that failed, so the split by job type, the split by
+            person and the entry list below are <em>missing</em>, not empty. This is not a task
+            with no time on it.
+          </p>
+          <p className="mt-1">
+            What still holds: {formatHours(Number(task.actual_hours))} spent
+            {task.estimate_hours != null
+              ? ` against a ${formatHours(task.estimate_hours)} estimate`
+              : ', no estimate'}
+            .
+          </p>
+          <code className="mt-1 block text-xs">{entriesError}</code>
+        </div>
+      ) : (
+        <TaskTimeBreakdown
+          estimate={task.estimate_hours}
+          actual={Number(task.actual_hours)}
+          entries={entries}
+          employeeColors={employeeColors}
+        />
+      )}
 
       {task.estimate_hours == null && Number(task.actual_hours) > 0 && (
         <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
           This task has no estimate. {formatHours(Number(task.actual_hours))} tracked so far.
+        </div>
+      )}
+
+      {/* On failure `contributors` is [], and the table below renders nothing
+          at all — indistinguishable from a task nobody has worked on. Say so. */}
+      {contributorsError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <span className="font-medium">Contributors could not be loaded.</span> Nobody is being
+          claimed to have worked on this task — the query failed.{' '}
+          <code className="text-xs">{contributorsError}</code>
         </div>
       )}
 

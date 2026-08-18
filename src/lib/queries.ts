@@ -435,11 +435,28 @@ type RawTaskTimeEntry = {
  * Raw time-record entries for a single task, joined to user and job_type
  * via PostgREST embed. Returned in record_date desc order so the most
  * recent work is at the top.
+ *
+ * The `!user_id` on the users embed is load-bearing, not decoration.
+ * `time_records` now has TWO foreign keys to `users` — `user_id` (who did the
+ * work) and `created_by_id` (who typed the entry in, added by backend
+ * migration 2026_08_07_120001). With two candidates PostgREST cannot resolve a
+ * bare `user:users(...)` and answers `300 Multiple Choices`, which is what
+ * broke every task detail page in the product on 2026-08-07 (D1).
+ *
+ * The hint is the FK *column*, not the FK *constraint name*, on purpose: both
+ * constraints were created by Laravel's `foreignId()->constrained('users')`,
+ * so their names follow Laravel's `<table>_<column>_foreign` convention rather
+ * than Postgres' `_fkey` one — and a hint that has to match a naming
+ * convention is a hint that breaks when the convention does. The column name
+ * is in the schema itself.
+ *
+ * If a third FK to `users` is ever added, nothing here changes; if `user_id`
+ * is ever renamed, this must be renamed with it.
  */
 export async function fetchTaskTimeRecordEntries(taskId: number): Promise<TaskTimeEntry[]> {
   const { data, error } = await supabase
     .from('time_records')
-    .select('id, user_id, job_type_id, value_hours, record_date, created_on, billable_status, summary, user:users(id,display_name), job_type:job_types(id,name)')
+    .select('id, user_id, job_type_id, value_hours, record_date, created_on, billable_status, summary, user:users!user_id(id,display_name), job_type:job_types(id,name)')
     .eq('task_id', taskId)
     .eq('is_trashed', false)
     .order('record_date', { ascending: false })
